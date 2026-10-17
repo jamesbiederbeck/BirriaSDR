@@ -15,7 +15,7 @@
 /* Enumerate known identities without assuming identical RF wiring across boards. */
 static const struct bs_usb_id devices[] = {
     {0x3574, 0x6211, "COMFAST MT7961 / MT7972", &bs_mt7921_backend, true},
-    {0x0e8d, 0x7961, "MT7921 USB (board not qualified)", &bs_mt7921_backend, false},
+    {0x0e8d, 0x7961, "EDUP AX3000M MT7921AU", &bs_mt7921_backend, true},
     {0x0e8d, 0x7925, "MT7925 USB (not implemented)", &bs_mt7925_backend, false},
     {0x0846, 0x9050, "Netgear A8500 MT7925 (not implemented)", &bs_mt7925_backend, false},
     {0x0846, 0x9072, "Netgear A9000 MT7925 (not implemented)", &bs_mt7925_backend, false}
