@@ -50,6 +50,10 @@ struct bs_usb_id {
     const char *name;
     const struct bs_backend *backend;
     bool qualified;
+    /* Exact USB iProduct string required in addition to vid:pid and the chip ID
+     * read by backend->identify(). NULL accepts any string.
+     */
+    const char *product;
 };
 
 struct birriasdr_dev {
@@ -103,6 +107,7 @@ struct bs_framer {
 extern const struct bs_backend bs_mt7921_backend;
 extern const struct bs_backend bs_mt7925_backend;
 const struct bs_usb_id *bs_lookup_id(uint16_t vid, uint16_t pid);
+bool bs_product_matches(const struct bs_usb_id *id, const char *product);
 int bs_usb_discover(uint32_t index, struct birriasdr_device_info *info,
                     birriasdr_dev_t *open_device);
 void bs_usb_close(birriasdr_dev_t *dev);

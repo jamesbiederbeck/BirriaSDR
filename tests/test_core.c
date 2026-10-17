@@ -150,6 +150,14 @@ static void test_api(void)
     dev.frequency = dev.backend->default_frequency;
     dev.rate = dev.backend->default_rate;
     CHECK(id && id->backend->chipset == BIRRIASDR_CHIP_MT7925 && !id->qualified);
+    {
+        const struct bs_usb_id *edup = bs_lookup_id(0x0e8d, 0x7961);
+        const struct bs_usb_id *comfast = bs_lookup_id(0x3574, 0x6211);
+        CHECK(edup && edup->qualified && edup->backend == &bs_mt7921_backend);
+        CHECK(bs_product_matches(edup, "Wireless_Device"));
+        CHECK(!bs_product_matches(edup, "Wireless_Device2") && !bs_product_matches(edup, NULL));
+        CHECK(comfast && bs_product_matches(comfast, "anything") && bs_product_matches(comfast, NULL));
+    }
     CHECK(id->backend->prepare(&dev, 0) == BIRRIASDR_ERROR_UNSUPPORTED);
     CHECK(birriasdr_set_tuner_gain(&dev, 100) == BIRRIASDR_ERROR_UNSUPPORTED);
     CHECK(birriasdr_set_agc_mode(&dev, 1) == BIRRIASDR_ERROR_UNSUPPORTED);

@@ -6,6 +6,23 @@ This records how the `0e8d:7961` entry in `src/usb.c` was tested before its
 MediaTek's generic ID, so other dongles may share it with different RF wiring.
 Only this unit was tested.
 
+## Qualification key
+
+A board is qualified only when all three of these match:
+
+1. **Chipset:** the digital chip ID read from MMIO `0x70010200` has low 16 bits
+   `0x7961`. `identify()` checks this before any boot or reset write.
+2. **USB ID:** vendor and product ID `0e8d:7961`, as `lsusb` prints it.
+3. **USB product string:** the `iProduct` descriptor is exactly
+   `Wireless_Device`. The library reads it after opening the device and before
+   claiming the interface. A mismatch returns `BIRRIASDR_ERROR_UNSUPPORTED`.
+
+The product string narrows the match but does not uniquely identify this EDUP
+model. The tested unit reports `iManufacturer` "MediaTek Inc.", `iProduct`
+"Wireless_Device", `iSerial` "000000000" and `bcdDevice` 1.00, which are
+MediaTek's reference-design defaults, so other vendors may report the same.
+`--list` still keys on the USB ID alone, because it does not open the device.
+
 ## Result
 
 The 2.4 GHz receive path works on this board with the existing channel 6

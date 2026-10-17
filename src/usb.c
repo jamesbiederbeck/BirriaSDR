@@ -12,13 +12,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* Enumerate known identities without assuming identical RF wiring across boards. */
+/* Enumerate known identities without assuming identical RF wiring across boards.
+ * A board is qualified by the combination of its USB vid:pid, its USB product
+ * string (when listed) and the chip ID that the backend reads before any write.
+ */
 static const struct bs_usb_id devices[] = {
-    {0x3574, 0x6211, "COMFAST MT7961 / MT7972", &bs_mt7921_backend, true},
-    {0x0e8d, 0x7961, "EDUP AX3000M MT7921AU", &bs_mt7921_backend, true},
-    {0x0e8d, 0x7925, "MT7925 USB (not implemented)", &bs_mt7925_backend, false},
-    {0x0846, 0x9050, "Netgear A8500 MT7925 (not implemented)", &bs_mt7925_backend, false},
-    {0x0846, 0x9072, "Netgear A9000 MT7925 (not implemented)", &bs_mt7925_backend, false}
+    {0x3574, 0x6211, "COMFAST MT7961 / MT7972", &bs_mt7921_backend, true, NULL},
+    {0x0e8d, 0x7961, "EDUP AX3000M MT7921AU", &bs_mt7921_backend, true, "Wireless_Device"},
+    {0x0e8d, 0x7925, "MT7925 USB (not implemented)", &bs_mt7925_backend, false, NULL},
+    {0x0846, 0x9050, "Netgear A8500 MT7925 (not implemented)", &bs_mt7925_backend, false, NULL},
+    {0x0846, 0x9072, "Netgear A9000 MT7925 (not implemented)", &bs_mt7925_backend, false, NULL}
 };
 
 /* A NULL match excludes arbitrary Wi-Fi devices from probing or register writes. */
@@ -28,6 +31,12 @@ const struct bs_usb_id *bs_lookup_id(uint16_t vid, uint16_t pid)
         if (devices[i].vid == vid && devices[i].pid == pid)
             return &devices[i];
     return NULL;
+}
+
+/* A NULL expected string accepts any product; a listed string must match exactly. */
+bool bs_product_matches(const struct bs_usb_id *id, const char *product)
+{
+    return !id->product || (product && !strcmp(id->product, product));
 }
 
 /* Normalize transport errors so applications need not include libusb headers. */
@@ -229,6 +238,15 @@ static int claim_device(birriasdr_dev_t *dev, libusb_device *usb, const struct b
     dev->rate = dev->backend->default_rate;
     BS_TRY(lock_device(dev, id, usb));
     BS_TRY(bs_usb_error(libusb_open(usb, &dev->handle)));
+    if (id->product) {
+        struct libusb_device_descriptor descriptor;
+        unsigned char product[64] = "";
+        BS_TRY(bs_usb_error(libusb_get_device_descriptor(usb, &descriptor)));
+        if (libusb_get_string_descriptor_ascii(dev->handle, descriptor.iProduct,
+                                               product, sizeof(product)) < 0 ||
+            !bs_product_matches(id, (const char *)product))
+            return BIRRIASDR_ERROR_UNSUPPORTED;
+    }
     BS_TRY(find_interface(dev, usb));
     result = libusb_kernel_driver_active(dev->handle, dev->interface_number);
     if (result == 1)
