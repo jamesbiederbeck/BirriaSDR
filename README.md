@@ -70,7 +70,7 @@ For more detail, see:
 
 | Parameter | Current value |
 | --- | --- |
-| Hardware | COMFAST dongle `3574:6211`, or a board with MediaTek's generic ID `0e8d:7961`, with an MT7961 digital die and an MT7972 analog die |
+| Hardware | COMFAST dongle `3574:6211`, or a board with MediaTek's generic ID `0e8d:7961`, with an MT7961 digital die and an MT7972 analog die. See [docs/qualification-0e8d-7961.md](docs/qualification-0e8d-7961.md) for one tested generic-ID board |
 | Frequency tuning | 2156 to 2610 MHz, or 2190 to 2610 MHz on generic-ID boards, including live changes. Sensitivity across the range is unverified. No 5 GHz support yet |
 | Tuning step | Nominally 28.61 Hz, using the full 20-bit fraction. Requests are in whole hertz with no Wi-Fi channel restriction. The physical response to fine steps is still unmeasured |
 | Sample rate | 40 MSps complex, fixed |
