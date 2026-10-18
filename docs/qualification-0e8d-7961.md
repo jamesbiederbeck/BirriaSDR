@@ -22,6 +22,16 @@ differs in these ways:
 The two units disagree about the floor by 10 MHz, so the limit is per board,
 not per ID.
 
+## USB descriptors
+
+The tested unit reports `iManufacturer` "MediaTek Inc.", `iProduct`
+"Wireless_Device", `iSerial` "000000000" and `bcdDevice` 1.00. These are
+MediaTek's reference-design defaults, so they do not identify the EDUP model,
+and other vendors' boards may report the same. The library matches
+`0e8d:7961` on the USB ID and on the digital chip ID at MMIO `0x70010200`
+(low 16 bits `0x7961`), which `identify()` reads before any boot or reset
+write.
+
 ## Result
 
 The 2.4 GHz receive path works on this board with the existing channel 6
