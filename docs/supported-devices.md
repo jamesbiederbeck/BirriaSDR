@@ -9,7 +9,7 @@ add another one. It answers the question of how a dongle becomes qualified.
 | Device | USB ID | 2.4 GHz receive | 5 GHz receive | 6 GHz receive | Radio bands | Tuning range | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | COMFAST MT7961/MT7972 | `3574:6211` | ✅ | ❌ | ❌ | Dual band | 2156 to 2610 MHz, nominal | Qualified |
-| EDUP EP-AX1672 (AX3000M, MT7921AU) | `0e8d:7961` | ✅ | ❌ | ❌ | Tri-band 802.11ax | 2169 to 2610 MHz, measured | Proposed |
+| EDUP EP-AX1672 (AX3000M, MT7921AU) | `0e8d:7961` | ✅ | ✅ | ✅ | Tri-band 802.11ax | 2169 to 2610 MHz, 5150 to 5924 MHz and 5925 to 7125 MHz, measured | Proposed |
 
 The legend for the receive columns follows.
 
@@ -21,9 +21,12 @@ The legend for the receive columns follows.
 
 Every measurement on this page comes from the board named in its row. The
 EDUP row is proposed until the qualification change that enables it is merged.
-The tested EDUP unit reports 5 GHz and 6 GHz channels under the stock Linux
-driver, so those bands are a hardware capability that the library does not use
-yet.
+Its 5 GHz and 6 GHz marks depend on a separate change that adds the high-band
+tuning path, so they hold only once that change is merged too. On the tested
+EDUP unit, signals were received from 5220 to 5785 MHz and from 6135 to 6855 MHz.
+Tuning, calibration and streaming succeeded across the whole listed range.
+The library's `get_tuning_range()` still reports only 2156 to 2610 MHz. The
+COMFAST board was not tested on 5 GHz or 6 GHz, so its marks stay ❌.
 
 ## Recognized but unsupported
 
