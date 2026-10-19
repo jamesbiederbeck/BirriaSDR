@@ -139,13 +139,20 @@ static int identify(birriasdr_dev_t *dev)
     return (chip & 0xffff) == 0x7961 ? 0 : BIRRIASDR_ERROR_UNSUPPORTED;
 }
 
+/* The command intervals of mt_band_of(), in its band order. */
+static const struct bs_band bands[] = {
+    {MT_RF_MIN_HZ, MT_RF_MAX_HZ},
+    {MT_RF_5G_MIN_HZ, MT_RF_6G_MIN_HZ - 1},
+    {MT_RF_6G_MIN_HZ, MT_RF_6G_MAX_HZ}
+};
+
 const struct bs_backend bs_mt7921_backend = {
     .chipset = BIRRIASDR_CHIP_MT7921,
     .name = "MT7961/MT7972",
     .capabilities = BIRRIASDR_CAP_RX | BIRRIASDR_CAP_RAW_GAIN | BIRRIASDR_CAP_LIVE_GAIN |
                     BIRRIASDR_CAP_TUNING | BIRRIASDR_CAP_LIVE_TUNING,
     .default_frequency = MT_RF_ANCHOR_HZ,
-    .min_frequency = MT_RF_MIN_HZ, .max_frequency = MT_RF_MAX_HZ,
+    .bands = bands, .band_count = sizeof(bands) / sizeof(bands[0]),
     .default_rate = 40000000,
     .validate = validate,
     .identify = identify,
@@ -154,3 +161,5 @@ const struct bs_backend bs_mt7921_backend = {
     .change_frequency = mt_change_frequency,
     .validate_change = validate_change
 };
+
+_Static_assert(sizeof(bands) / sizeof(bands[0]) <= BS_MAX_BANDS, "too many MT7921 bands");

@@ -171,7 +171,8 @@ points are:
 birriasdr_get_device_count();
 birriasdr_get_device_info(index, &info);
 birriasdr_open(&dev, index);
-birriasdr_get_tuning_range(dev, &minimum_hz, &maximum_hz);
+birriasdr_get_tuning_ranges(dev, ranges, capacity); /* Returns the number of bands. */
+birriasdr_set_tuning_range(dev, band, minimum_hz, maximum_hz); /* While idle; 0 keeps the board's. */
 birriasdr_set_center_freq(dev, 2437000000ULL);
 birriasdr_set_sample_rate(dev, 40000000);
 birriasdr_set_tuner_gain_mode(dev, 1);
