@@ -27,12 +27,23 @@ struct bs_io {
     int (*write32)(void *, enum bs_space, uint32_t, uint32_t);
 };
 
+#define BS_MAX_BANDS 4
+
+/* Inclusive command limits of one band. In board and device copies a zero
+ * bound keeps the backend's value.
+ */
+struct bs_band {
+    uint64_t min_frequency, max_frequency;
+};
+
 struct bs_backend {
     enum birriasdr_chipset chipset;
     const char *name;
     uint32_t capabilities;
     uint64_t default_frequency;
-    uint64_t min_frequency, max_frequency;
+    /* Disjoint bands in ascending order. Live retuning stays within one. */
+    const struct bs_band *bands;
+    size_t band_count;
     uint32_t default_rate;
     int (*validate)(uint64_t frequency, uint32_t rate, const struct birriasdr_gain *gain);
     int (*identify)(birriasdr_dev_t *);
@@ -54,8 +65,8 @@ struct bs_usb_id {
     const char *name;
     const struct bs_backend *backend;
     bool qualified;
-    /* Board tuning bounds; zero keeps the backend's. */
-    uint64_t min_frequency, max_frequency;
+    /* Board tuning bounds, indexed like backend->bands. */
+    struct bs_band bands[BS_MAX_BANDS];
 };
 
 struct birriasdr_dev {
@@ -65,7 +76,10 @@ struct birriasdr_dev {
     int lock_fd;
     uint8_t ep_in, ep_command, ep_download;
     const struct bs_backend *backend;
-    uint64_t min_frequency, max_frequency;
+    /* Tuning bounds per backend band. board_bands is the device table's copy,
+     * which birriasdr_set_tuning_range() restores for a zero bound.
+     */
+    struct bs_band bands[BS_MAX_BANDS], board_bands[BS_MAX_BANDS];
     struct bs_io io;
     atomic_uint run_state;
     /* Serializes whole register procedures, not individual USB transfers.
