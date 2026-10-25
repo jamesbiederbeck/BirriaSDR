@@ -145,6 +145,14 @@ another driver loaded firmware onto it. The library refuses to run while a
 kernel driver is attached, and it never unloads drivers or power-cycles a USB
 hub.
 
+### SoapySDR module
+
+A SoapySDR module (`driver=birria`) lets any SoapySDR application use the
+dongle, such as CubicSDR or an SDR++ server. It builds automatically when
+SoapySDR is installed and is written to `build/soapy/`. See
+[`docs/soapy.md`](docs/soapy.md) for the supported settings, the udev rule and
+client walkthroughs. Pass `-DBIRRIASDR_SOAPY=OFF` to skip it.
+
 ## API
 
 The library follows the familiar enumerate, open, configure, read, cancel and
