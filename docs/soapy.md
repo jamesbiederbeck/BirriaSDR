@@ -12,17 +12,17 @@ the requested rate with a host-side filter.
 | Driver key | `driver=birria`. A dongle is selected by enumeration order with `index=N` |
 | Sample rates | 40 MSps divided by 1, 2, 4, 5, 8, 10, 16, 20 or 40, giving 40 MSps down to 1 MSps. The dongle always runs at 40 MSps and the module decimates with a host-side filter |
 | Stream formats | `CS16` (native) and `CF32` |
-| Frequency range | The library's reported tuning range, from `birriasdr_get_tuning_range()`. On a current board that is 2156 to 2610 MHz |
+| Frequency ranges | One range per library band, from `birriasdr_get_tuning_ranges()`. Currently 2156 to 2610 MHz (2190 MHz floor on `0e8d:7961`), 5150 to 5925 MHz and 5925 to 7125 MHz |
 | Gains | `LNA` 0 to 3, `LPF` 0 to 8 and `DIG` 0 to 12. These are raw codes, not dB |
 | Gain mode | Automatic (the library default) or manual. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected |
+| Band overrides | Device arguments `bandN_min` and `bandN_max` (Hz) replace one band's bounds through `birriasdr_set_tuning_range()`, for example `band0_min=2169e6`. A missing value keeps the board's value |
 
 Errors from tuning, sample-rate changes and gain changes are logged, not
 thrown, because some front ends do not catch exceptions from these calls and
 would abort. A rejected frequency leaves the receiver where it was.
 
-This module exposes the single tuning range the library reports on `main`.
-Multi-band tuning (5 GHz and 6 GHz) and per-band overrides ride on a separate
-library branch and are planned as a follow-up once that work lands.
+Live retuning cannot cross bands. To move between 2.4 GHz, 5 GHz and 6 GHz,
+stop the stream, retune, then start it again.
 
 ## Build
 
@@ -79,8 +79,9 @@ SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy CubicSDR
 
 In the device dialog, pick the MediaTek entry and press Start. Turn AGC off to
 use the `LNA`, `LPF` and `DIG` sliders. A reasonable start is `LNA` 2, `LPF` 8
-and `DIG` 0. CubicSDR cannot demodulate Wi-Fi, so treat it as a spectrum and
-waterfall view.
+and `DIG` 0, and `LNA` 3 at 6 GHz. CubicSDR cannot demodulate Wi-Fi, so treat
+it as a spectrum and waterfall view. Stop playback before you change bands,
+since live retuning cannot cross between 2.4 GHz, 5 GHz and 6 GHz.
 
 ## SDR++ server and a remote client
 
@@ -112,7 +113,10 @@ a sample rate. The sample rate sets the waterfall span. A good start is 5 MSps,
 and 10 or 20 MSps work when the network link keeps up. For a remote client, set
 the sample type to int8 and turn compression on to reduce bandwidth. Enter
 frequencies in Hz, for example `2437000000` for Wi-Fi channel 6, and use mode
-RAW because SDR++ cannot demodulate Wi-Fi.
+RAW because SDR++ cannot demodulate Wi-Fi. Good test points are 2437 MHz on
+2.4 GHz, 5220 MHz on 5 GHz and 6135 MHz on 6 GHz, where access points were
+received during the library's qualification. Stop playback before you change
+bands.
 
 ## Manual stream test
 

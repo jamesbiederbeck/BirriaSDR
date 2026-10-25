@@ -25,9 +25,26 @@ static bool report(int result, const char *what)
     return result == 0;
 }
 
-SoapyBirria::SoapyBirria(uint32_t index, const SoapySDR::Kwargs &)
+/* bandN_min / bandN_max (Hz) replace one band's bounds, N indexing the library's
+ * band list. Use them for a board measured to tune beyond its table entry.
+ */
+SoapyBirria::SoapyBirria(uint32_t index, const SoapySDR::Kwargs &args)
 {
     check(birriasdr_open(&dev_, index), "open");
+    const int bands = birriasdr_get_tuning_ranges(dev_, nullptr, 0);
+    for (int band = 0; band < bands; ++band) {
+        const std::string prefix = "band" + std::to_string(band);
+        const auto lo = args.find(prefix + "_min"), hi = args.find(prefix + "_max");
+        if (lo == args.end() && hi == args.end())
+            continue;
+        const uint64_t minimum = lo == args.end() ? 0 : static_cast<uint64_t>(std::stod(lo->second));
+        const uint64_t maximum = hi == args.end() ? 0 : static_cast<uint64_t>(std::stod(hi->second));
+        const int result = birriasdr_set_tuning_range(dev_, band, minimum, maximum);
+        if (result != 0) {
+            birriasdr_close(dev_);
+            check(result, "set_tuning_range");
+        }
+    }
     SoapySDR::logf(SOAPY_SDR_INFO, "birria: opened device %u", index);
 }
 
@@ -40,7 +57,7 @@ SoapyBirria::~SoapyBirria()
 SoapySDR::Kwargs SoapyBirria::getHardwareInfo() const
 {
     SoapySDR::Kwargs info;
-    info["note"] = "experimental; raw gain codes, not dB";
+    info["note"] = "experimental; raw gain codes, not dB; live retuning stays within one band";
     return info;
 }
 
@@ -121,13 +138,18 @@ std::vector<std::string> SoapyBirria::listFrequencies(const int, const size_t) c
 
 SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t, const std::string &) const
 {
-    uint64_t minimum = 0, maximum = 0;
-    const int rc = birriasdr_get_tuning_range(dev_, &minimum, &maximum);
-    if (rc != 0) {
-        report(rc, "get_tuning_range");
-        return {};
+    std::vector<birriasdr_tuning_range> bands(4);
+    int count = birriasdr_get_tuning_ranges(dev_, bands.data(), bands.size());
+    if (count > static_cast<int>(bands.size())) {
+        bands.resize(count);
+        count = birriasdr_get_tuning_ranges(dev_, bands.data(), bands.size());
     }
-    return {SoapySDR::Range(static_cast<double>(minimum), static_cast<double>(maximum))};
+    if (count < 0)
+        check(count, "get_tuning_ranges");
+    SoapySDR::RangeList ranges;
+    for (int i = 0; i < count; ++i)
+        ranges.emplace_back(static_cast<double>(bands[i].minimum_hz), static_cast<double>(bands[i].maximum_hz));
+    return ranges;
 }
 
 /* The hardware rate is fixed at 40 MSps. Lower rates are 40 MSps / N, decimated here. */
