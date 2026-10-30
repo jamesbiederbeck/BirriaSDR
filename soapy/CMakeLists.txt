@@ -27,6 +27,7 @@ endif()
 # it opens a physical dongle.
 if(BUILD_TESTING)
     add_executable(test_soapy_stream tests/test_soapy_stream.cpp)
+    target_compile_features(test_soapy_stream PRIVATE cxx_std_17)
     target_include_directories(test_soapy_stream PRIVATE ${SoapySDR_INCLUDE_DIRS})
     target_link_libraries(test_soapy_stream PRIVATE ${SoapySDR_LIBRARIES})
 endif()

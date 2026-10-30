@@ -131,8 +131,9 @@ bool SoapyBirria::getGainMode(const int, const size_t) const
 }
 
 /* Round and clamp the code. In automatic mode it is stored for later. In manual
- * mode it is sent, and stored only if the library accepts it, so a refused
- * change does not look applied.
+ * mode it replaces only its own element of the library's committed codes, so a
+ * stale stored code for another element is never sent. It is stored only if
+ * the library accepts it, so a refused change does not look applied.
  */
 void SoapyBirria::setGain(const int, const size_t, const std::string &name, const double value)
 {
@@ -140,15 +141,17 @@ void SoapyBirria::setGain(const int, const size_t, const std::string &name, cons
     const uint8_t code = static_cast<uint8_t>(
         std::lround(std::clamp(value, range.minimum(), range.maximum())));
     std::lock_guard<std::mutex> lock(gainMutex_);
-    birriasdr_gain next = gain_;
+    birriasdr_gain committed;
+    int manual = 0;
+    const bool known = birriasdr_get_gain_codes(dev_, &committed, &manual) == 0;
+    birriasdr_gain next = known && manual ? committed : gain_;
     if (name == "LNA")
         next.lna = code;
     else if (name == "LPF")
         next.lpf = code;
     else
         next.digital = code;
-    if (getGainMode(SOAPY_SDR_RX, 0) ||
-        report(birriasdr_set_gain_codes(dev_, &next), "set_gain_codes"))
+    if (!(known && manual) || report(birriasdr_set_gain_codes(dev_, &next), "set_gain_codes"))
         gain_ = next;
 }
 
