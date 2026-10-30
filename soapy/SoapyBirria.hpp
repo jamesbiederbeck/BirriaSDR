@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <vector>
 
@@ -85,11 +86,16 @@ private:
     static constexpr uint32_t kMaxRestarts = 3; /* device or transport faults per stream */
 
     birriasdr_dev_t *dev_ = nullptr;
+    /* Library control calls. Calls the library allows to overlap take it shared.
+     * The idle-only rate setter and the start of a read take it exclusively.
+     * Taken before gainMutex_.
+     */
+    mutable std::shared_mutex controlMutex_;
     mutable std::mutex gainMutex_; /* guards gain_ across concurrent gain calls */
     birriasdr_gain gain_{2, 8, 0};
     bool streamOpen_ = false;
     bool cs16_ = false;
-    double rate_ = 0;
+    std::atomic<double> rate_{0};
 
     std::thread worker_;
     std::atomic<bool> active_{false};  /* between activateStream and deactivateStream */

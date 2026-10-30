@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <shared_mutex>
 #include <stdexcept>
 
 /* Construction has no front end to report to, so a failed open throws. */
@@ -116,6 +117,7 @@ bool SoapyBirria::hasGainMode(const int, const size_t) const
  */
 void SoapyBirria::setGainMode(const int, const size_t, const bool automatic)
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     std::lock_guard<std::mutex> lock(gainMutex_);
     if (report(birriasdr_set_tuner_gain_mode(dev_, automatic ? 0 : 1), "set_tuner_gain_mode") &&
         !automatic)
@@ -125,6 +127,7 @@ void SoapyBirria::setGainMode(const int, const size_t, const bool automatic)
 /* Report automatic mode unless the library confirms manual mode. */
 bool SoapyBirria::getGainMode(const int, const size_t) const
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     birriasdr_gain gain;
     int manual = 0;
     return birriasdr_get_gain_codes(dev_, &gain, &manual) != 0 || !manual;
@@ -137,6 +140,7 @@ bool SoapyBirria::getGainMode(const int, const size_t) const
  */
 void SoapyBirria::setGain(const int, const size_t, const std::string &name, const double value)
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     const auto range = getGainRange(SOAPY_SDR_RX, 0, name);
     const uint8_t code = static_cast<uint8_t>(
         std::lround(std::clamp(value, range.minimum(), range.maximum())));
@@ -160,6 +164,7 @@ void SoapyBirria::setGain(const int, const size_t, const std::string &name, cons
  */
 double SoapyBirria::getGain(const int, const size_t, const std::string &name) const
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     std::lock_guard<std::mutex> lock(gainMutex_);
     birriasdr_gain gain = gain_;
     birriasdr_gain committed;
@@ -179,6 +184,7 @@ double SoapyBirria::getGain(const int, const size_t, const std::string &name) co
 void SoapyBirria::setFrequency(const int, const size_t, const std::string &, const double frequency,
                                const SoapySDR::Kwargs &)
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     report(birriasdr_set_center_freq(dev_, static_cast<uint64_t>(std::llround(frequency))),
            "set_center_freq");
 }
@@ -186,6 +192,7 @@ void SoapyBirria::setFrequency(const int, const size_t, const std::string &, con
 /* Return the committed center, not the frequency of samples already queued. */
 double SoapyBirria::getFrequency(const int, const size_t, const std::string &) const
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     return static_cast<double>(birriasdr_get_center_freq(dev_));
 }
 
@@ -202,6 +209,7 @@ std::vector<std::string> SoapyBirria::listFrequencies(const int, const size_t) c
 SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t,
                                                    const std::string &) const
 {
+    std::shared_lock<std::shared_mutex> control(controlMutex_);
     SoapySDR::RangeList ranges;
     for (uint32_t index = 0;; ++index) {
         uint64_t minimum = 0, maximum = 0;
@@ -225,11 +233,13 @@ SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t,
  */
 static const double kNativeRates[] = {40e6};
 
-/* Accept only a native rate and pass it to the library. The rate is idle-only,
- * and the library must not be configured while a read runs.
+/* Accept only a native rate and pass it to the library. The library requires
+ * this setter to run alone on the handle, so it holds the control lock
+ * exclusively, which also keeps a stream from starting meanwhile.
  */
 void SoapyBirria::setSampleRate(const int, const size_t, const double rate)
 {
+    std::unique_lock<std::shared_mutex> control(controlMutex_);
     if (running_) {
         SoapySDR::log(SOAPY_SDR_ERROR, "birria: cannot change the sample rate while streaming");
         return;
@@ -245,7 +255,9 @@ void SoapyBirria::setSampleRate(const int, const size_t, const double rate)
         rate_ = birriasdr_get_sample_rate(dev_);
 }
 
-/* Return the rate last committed to the library, cached so reads stay safe. */
+/* Return the rate last committed to the library, cached atomically so this
+ * needs no library call.
+ */
 double SoapyBirria::getSampleRate(const int, const size_t) const
 {
     return rate_;
@@ -377,6 +389,8 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int flags, const long 
 {
     if (flags != 0 || numElems != 0)
         return SOAPY_SDR_NOT_SUPPORTED;
+    /* Exclusive, so an idle-only setter cannot overlap the start of the read. */
+    std::unique_lock<std::shared_mutex> control(controlMutex_);
     if (running_)
         return 0;
     if (worker_.joinable())
