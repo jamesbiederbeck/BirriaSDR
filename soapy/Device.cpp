@@ -28,10 +28,18 @@ static bool report(int result, const char *what)
     return result == 0;
 }
 
-/* Open the dongle at its enumeration index. Device arguments are not used. */
+/* Open the dongle at its enumeration index. Device arguments are not used.
+ * Recovery is configured here because the library accepts it only while idle.
+ * It keeps a stream running across overruns and reports each gap.
+ */
 SoapyBirria::SoapyBirria(uint32_t index, const SoapySDR::Kwargs &)
 {
     check(birriasdr_open(&dev_, index), "open");
+    const int rc = birriasdr_set_recovery(dev_, kMaxRestarts, &SoapyBirria::recoveryCallback, this);
+    if (rc != 0) {
+        birriasdr_close(dev_);
+        check(rc, "set_recovery");
+    }
     SoapySDR::logf(SOAPY_SDR_INFO, "birria: opened device %u", index);
 }
 
@@ -253,15 +261,13 @@ SoapySDR::Stream *SoapyBirria::setupStream(const int direction, const std::strin
     if (direction != SOAPY_SDR_RX || (format != SOAPY_SDR_CS16 && format != SOAPY_SDR_CF32))
         throw std::runtime_error("birria: only RX CF32 and CS16 streams are supported");
     cs16_ = format == SOAPY_SDR_CS16;
-    streamOpen_ = true;
     return reinterpret_cast<SoapySDR::Stream *>(this);
 }
 
-/* Stop the stream if it is running, then release it. */
+/* Stop the stream if it is running. */
 void SoapyBirria::closeStream(SoapySDR::Stream *)
 {
     deactivateStream(nullptr);
-    streamOpen_ = false;
 }
 
 /* Forward the library callback to the device instance. */
@@ -270,9 +276,17 @@ void SoapyBirria::asyncCallback(const int16_t *iq, uint32_t count, uint64_t, voi
     static_cast<SoapyBirria *>(ctx)->onSamples(iq, count);
 }
 
+/* Forward the library's gap notification to the device instance. */
+void SoapyBirria::recoveryCallback(const birriasdr_recovery_event *, void *ctx)
+{
+    static_cast<SoapyBirria *>(ctx)->onGap();
+}
+
 /* Runs on the read thread: copy and return. Never block here or the device SRAM overruns. */
 void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
 {
+    if (count == 0)
+        return; /* an empty chunk would read as a gap */
     std::lock_guard<std::mutex> lock(mutex_);
     if (queued_ + count > kMaxQueuedSamples) {
         overflow_ = true;
@@ -280,6 +294,16 @@ void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
     }
     queue_.emplace_back(iq, iq + 2 * static_cast<size_t>(count));
     queued_ += count;
+    cond_.notify_one();
+}
+
+/* Runs on the read thread after the library has delivered every sample from
+ * before the gap, so a marker queued here sits at the gap's position.
+ */
+void SoapyBirria::onGap()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.emplace_back();
     cond_.notify_one();
 }
 
@@ -300,11 +324,9 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, 
         queued_ = 0;
         overflow_ = false;
     }
-    workerResult_ = 0;
     running_ = true;
     worker_ = std::thread([this] {
-        const int rc = birriasdr_read_async(dev_, &SoapyBirria::asyncCallback, this, 0, 0);
-        workerResult_ = rc;
+        report(birriasdr_read_async(dev_, &SoapyBirria::asyncCallback, this, 0, 0), "read_async");
         running_ = false;
         cond_.notify_all();
     });
@@ -327,7 +349,9 @@ int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int, const long long
 }
 
 /* Wait for enough input to fill the request, then filter and decimate it.
- * Overflow clears the queue and restarts the filter history.
+ * A gap, or an overflow of this module's queue, returns OVERFLOW and restarts
+ * the filter history, so no output sample spans it. Input waiting from before
+ * the gap is dropped. A stream that is not running returns STREAM_ERROR.
  */
 int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t numElems,
                             int &flags, long long &timeNs, const long timeoutUs)
@@ -345,7 +369,7 @@ int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t
             std::unique_lock<std::mutex> lock(mutex_);
             if (queue_.empty() && !overflow_) {
                 if (!running_)
-                    return workerResult_ < 0 ? SOAPY_SDR_STREAM_ERROR : SOAPY_SDR_NOT_SUPPORTED;
+                    return SOAPY_SDR_STREAM_ERROR;
                 if (!cond_.wait_until(lock, deadline,
                                       [this] { return !queue_.empty() || overflow_ || !running_; }))
                     return SOAPY_SDR_TIMEOUT;
@@ -362,6 +386,10 @@ int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t
             chunk = std::move(queue_.front());
             queue_.pop_front();
             queued_ -= chunk.size() / 2;
+        }
+        if (chunk.empty()) {
+            in_.assign(2 * history, 0.0f);
+            return SOAPY_SDR_OVERFLOW;
         }
         const size_t old = in_.size();
         in_.resize(old + chunk.size());

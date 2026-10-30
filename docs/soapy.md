@@ -20,6 +20,14 @@ Errors from tuning, sample-rate changes and gain changes are logged, not
 thrown, because some front ends do not catch exceptions from these calls and
 would abort. A rejected frequency leaves the receiver where it was.
 
+The module enables the library's automatic recovery, so a stream keeps running
+across overruns. Each gap reaches the application as `SOAPY_SDR_OVERFLOW` from
+the read call, and the samples that follow are not continuous with the ones
+before it. The number of missing samples is unknown. Clean overruns always
+recover. Other device or transport faults get three restarts per stream, after
+which reads return `SOAPY_SDR_STREAM_ERROR` and the module logs the cause. A
+stream that is not running also returns `SOAPY_SDR_STREAM_ERROR`.
+
 Each range is a command interval from the library, not measured RF coverage.
 A band that the board cannot reach is left out.
 
