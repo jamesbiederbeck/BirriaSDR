@@ -195,13 +195,19 @@ SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t,
  */
 static const double kNativeRates[] = {40e6};
 
-/* Pass the rate to the library, which validates it. The rate is idle-only, and
- * the library must not be configured while a read runs.
+/* Accept only a native rate and pass it to the library. The rate is idle-only,
+ * and the library must not be configured while a read runs.
  */
 void SoapyBirria::setSampleRate(const int, const size_t, const double rate)
 {
     if (running_) {
         SoapySDR::log(SOAPY_SDR_ERROR, "birria: cannot change the sample rate while streaming");
+        return;
+    }
+    /* Check the list before narrowing, so a huge value cannot wrap to a valid rate. */
+    if (std::none_of(std::begin(kNativeRates), std::end(kNativeRates),
+                     [rate](double native) { return std::fabs(rate - native) < 1.0; })) {
+        SoapySDR::log(SOAPY_SDR_ERROR, "birria: the sample rate must be a native rate");
         return;
     }
     if (report(birriasdr_set_sample_rate(dev_, static_cast<uint32_t>(std::llround(rate))),
@@ -259,16 +265,39 @@ void SoapyBirria::closeStream(SoapySDR::Stream *)
     streamOpen_ = false;
 }
 
-/* Forward the library callback to the device instance. */
+/* Forward the library callback to the device instance. No exception may cross
+ * into the C library, so a failure here, such as an allocation, stops the read.
+ */
 void SoapyBirria::asyncCallback(const int16_t *iq, uint32_t count, uint64_t, void *ctx)
 {
-    static_cast<SoapyBirria *>(ctx)->onSamples(iq, count);
+    auto *self = static_cast<SoapyBirria *>(ctx);
+    try {
+        self->onSamples(iq, count);
+    } catch (...) {
+        self->onCallbackFailure();
+    }
 }
 
-/* Forward the library's gap notification to the device instance. */
+/* Forward the library's gap notification to the device instance, with the same
+ * failure handling as the sample callback.
+ */
 void SoapyBirria::recoveryCallback(const birriasdr_recovery_event *, void *ctx)
 {
-    static_cast<SoapyBirria *>(ctx)->onGap();
+    auto *self = static_cast<SoapyBirria *>(ctx);
+    try {
+        self->onGap();
+    } catch (...) {
+        self->onCallbackFailure();
+    }
+}
+
+/* Record the failure and cancel the read, which callbacks may do. The read then
+ * returns normally, so the library still runs its cleanup.
+ */
+void SoapyBirria::onCallbackFailure()
+{
+    callbackFailed_ = true;
+    birriasdr_cancel_async(dev_);
 }
 
 /* Runs on the read thread: copy and return. Never block here or the device SRAM overruns. */
@@ -307,12 +336,12 @@ void SoapyBirria::markGap()
 
 /* Reset the queue, then run the blocking library read on a worker. A worker
  * whose read already ended on its own is joined before replacing it. Timed
- * starts and finite bursts are not supported.
+ * starts, triggers and finite bursts are not supported, so any flag is refused.
  */
 int SoapyBirria::activateStream(SoapySDR::Stream *, const int flags, const long long,
                                 const size_t numElems)
 {
-    if ((flags & (SOAPY_SDR_HAS_TIME | SOAPY_SDR_END_BURST)) || numElems != 0)
+    if (flags != 0 || numElems != 0)
         return SOAPY_SDR_NOT_SUPPORTED;
     if (running_)
         return 0;
@@ -325,28 +354,40 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int flags, const long 
         queue_.clear();
         queued_ = 0;
     }
+    callbackFailed_ = false;
     active_ = true;
     running_ = true;
-    worker_ = std::thread([this] {
-        report(birriasdr_read_async(dev_, &SoapyBirria::asyncCallback, this, 0, 0), "read_async");
-        {
-            /* Publish under the lock so a reader cannot miss the wakeup. */
-            std::lock_guard<std::mutex> lock(mutex_);
-            running_ = false;
-        }
-        cond_.notify_all();
-    });
+    try {
+        worker_ = std::thread([this] {
+            report(birriasdr_read_async(dev_, &SoapyBirria::asyncCallback, this, 0, 0),
+                   "read_async");
+            if (callbackFailed_)
+                SoapySDR::log(SOAPY_SDR_ERROR,
+                              "birria: stopped the stream after a callback failure");
+            {
+                /* Publish under the lock so a reader cannot miss the wakeup. */
+                std::lock_guard<std::mutex> lock(mutex_);
+                running_ = false;
+            }
+            cond_.notify_all();
+        });
+    } catch (const std::exception &) {
+        active_ = false;
+        running_ = false;
+        SoapySDR::log(SOAPY_SDR_ERROR, "birria: cannot start the stream thread");
+        return SOAPY_SDR_STREAM_ERROR;
+    }
     return 0;
 }
 
 /* Cancel the library read and join its worker. Right after activation the
  * worker may not have started the read yet, and cancel returns STATE, so keep
  * retrying until the read accepts it or the worker has finished. Samples still
- * queued are discarded. A timed stop is not supported.
+ * queued are discarded. Timed and triggered stops are not supported.
  */
 int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int flags, const long long)
 {
-    if (flags & SOAPY_SDR_HAS_TIME)
+    if (flags != 0)
         return SOAPY_SDR_NOT_SUPPORTED;
     active_ = false;
     if (worker_.joinable()) {

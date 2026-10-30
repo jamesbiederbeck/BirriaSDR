@@ -14,7 +14,7 @@ converts samples to the requested format without resampling.
 | Stream formats | `CS16` (native) and `CF32` |
 | Frequency range | One range per band, from `birriasdr_get_tuning_band()`, so front ends do not offer the gap between bands. The bands match the frequency tuning row of the README [specifications](../README.md#specifications) |
 | Gains | `LNA` 0 to 5, `LPF` 0 to 8 and `DIG` 0 to 12. These are raw codes, not dB. The 5 GHz band needs `LNA` 4 or 5 for full sensitivity |
-| Gain mode | Automatic (the library default) or manual. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected |
+| Gain mode | Automatic (the library default) or manual. Automatic mode releases the manual overrides and is not full closed-loop AGC. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected |
 
 Each frequency range is a command interval from the library, not measured RF
 coverage. A band that the board cannot reach is left out. The sample rate can
@@ -38,8 +38,9 @@ three restarts per stream. Other errors, such as a lost device or corrupted
 packets, end the stream at once. When the stream ends, reads return
 `SOAPY_SDR_STREAM_ERROR` after the remaining samples and the module logs the
 cause. Before activation and after deactivation, reads wait for the timeout and
-return `SOAPY_SDR_TIMEOUT`. One stream can be open at a time, and timed starts,
-timed stops and finite bursts return `SOAPY_SDR_NOT_SUPPORTED`.
+return `SOAPY_SDR_TIMEOUT`. One stream can be open at a time. Activation and
+deactivation accept no flags, so timed starts and stops, triggers and finite
+bursts return `SOAPY_SDR_NOT_SUPPORTED`.
 
 ## Build
 

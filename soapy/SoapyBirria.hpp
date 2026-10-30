@@ -79,6 +79,7 @@ private:
     void onSamples(const int16_t *iq, uint32_t count);
     void onGap();
     void markGap();
+    void onCallbackFailure();
 
     static constexpr size_t kMaxQueuedSamples = 16u << 20; /* complex samples, ~64 MiB */
     static constexpr uint32_t kMaxRestarts = 3; /* device or transport faults per stream */
@@ -93,6 +94,7 @@ private:
     std::thread worker_;
     std::atomic<bool> active_{false};  /* between activateStream and deactivateStream */
     std::atomic<bool> running_{false}; /* the worker's library read has not returned */
+    std::atomic<bool> callbackFailed_{false};
     std::mutex mutex_;
     std::condition_variable cond_;
     std::deque<std::vector<int16_t>> queue_; /* an empty chunk marks a gap */
