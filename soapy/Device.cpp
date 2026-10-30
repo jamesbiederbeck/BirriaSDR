@@ -17,14 +17,29 @@ static void check(int result, const char *what)
                                  std::to_string(result) + ")");
 }
 
+/* Log an error as best effort. Logging can allocate, and it runs on failure
+ * paths where an exception would terminate the process, so it never throws.
+ */
+static void logError(const char *message) noexcept
+{
+    try {
+        SoapySDR::log(SOAPY_SDR_ERROR, message);
+    } catch (...) {
+    }
+}
+
 /* Setters called while an application runs log a refusal instead of throwing:
  * some front ends do not catch exceptions from these calls and abort.
  */
-static bool report(int result, const char *what)
+static bool report(int result, const char *what) noexcept
 {
-    if (result != 0)
-        SoapySDR::logf(SOAPY_SDR_ERROR, "birria: %s failed: %s (%d)", what,
-                       birriasdr_strerror(result), result);
+    if (result != 0) {
+        try {
+            SoapySDR::logf(SOAPY_SDR_ERROR, "birria: %s failed: %s (%d)", what,
+                           birriasdr_strerror(result), result);
+        } catch (...) {
+        }
+    }
     return result == 0;
 }
 
@@ -115,33 +130,45 @@ bool SoapyBirria::getGainMode(const int, const size_t) const
     return birriasdr_get_gain_codes(dev_, &gain, &manual) != 0 || !manual;
 }
 
-/* Store the rounded, clamped code and send it only in manual mode. */
+/* Round and clamp the code. In automatic mode it is stored for later. In manual
+ * mode it is sent, and stored only if the library accepts it, so a refused
+ * change does not look applied.
+ */
 void SoapyBirria::setGain(const int, const size_t, const std::string &name, const double value)
 {
     const auto range = getGainRange(SOAPY_SDR_RX, 0, name);
     const uint8_t code = static_cast<uint8_t>(
         std::lround(std::clamp(value, range.minimum(), range.maximum())));
     std::lock_guard<std::mutex> lock(gainMutex_);
+    birriasdr_gain next = gain_;
     if (name == "LNA")
-        gain_.lna = code;
+        next.lna = code;
     else if (name == "LPF")
-        gain_.lpf = code;
+        next.lpf = code;
     else
-        gain_.digital = code;
-    if (!getGainMode(SOAPY_SDR_RX, 0))
-        report(birriasdr_set_gain_codes(dev_, &gain_), "set_gain_codes");
+        next.digital = code;
+    if (getGainMode(SOAPY_SDR_RX, 0) ||
+        report(birriasdr_set_gain_codes(dev_, &next), "set_gain_codes"))
+        gain_ = next;
 }
 
-/* Return the stored code, which the library may not have applied yet. */
+/* Return the code the library committed in manual mode, or the stored code
+ * that manual mode will apply while automatic mode is on.
+ */
 double SoapyBirria::getGain(const int, const size_t, const std::string &name) const
 {
     std::lock_guard<std::mutex> lock(gainMutex_);
+    birriasdr_gain gain = gain_;
+    birriasdr_gain committed;
+    int manual = 0;
+    if (birriasdr_get_gain_codes(dev_, &committed, &manual) == 0 && manual)
+        gain = committed;
     if (name == "LNA")
-        return gain_.lna;
+        return gain.lna;
     if (name == "LPF")
-        return gain_.lpf;
+        return gain.lpf;
     if (name == "DIG")
-        return gain_.digital;
+        return gain.digital;
     throw std::runtime_error("birria: unknown gain element " + name);
 }
 
@@ -292,7 +319,9 @@ void SoapyBirria::recoveryCallback(const birriasdr_recovery_event *, void *ctx)
 }
 
 /* Record the failure and cancel the read, which callbacks may do. The read then
- * returns normally, so the library still runs its cleanup.
+ * returns normally, so the library still runs its cleanup. Callbacks that
+ * arrive while it drains are dropped, so no samples follow the lost ones
+ * without a gap.
  */
 void SoapyBirria::onCallbackFailure()
 {
@@ -303,8 +332,8 @@ void SoapyBirria::onCallbackFailure()
 /* Runs on the read thread: copy and return. Never block here or the device SRAM overruns. */
 void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
 {
-    if (count == 0)
-        return; /* an empty chunk would read as a gap */
+    if (count == 0 || callbackFailed_)
+        return; /* an empty chunk would read as a gap, and a failure ends the stream */
     std::lock_guard<std::mutex> lock(mutex_);
     if (queued_ + count > kMaxQueuedSamples) {
         markGap(); /* the application is not keeping up, so drop these samples */
@@ -320,6 +349,8 @@ void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
  */
 void SoapyBirria::onGap()
 {
+    if (callbackFailed_)
+        return;
     std::lock_guard<std::mutex> lock(mutex_);
     markGap();
 }
@@ -362,8 +393,7 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int flags, const long 
             report(birriasdr_read_async(dev_, &SoapyBirria::asyncCallback, this, 0, 0),
                    "read_async");
             if (callbackFailed_)
-                SoapySDR::log(SOAPY_SDR_ERROR,
-                              "birria: stopped the stream after a callback failure");
+                logError("birria: stopped the stream after a callback failure");
             {
                 /* Publish under the lock so a reader cannot miss the wakeup. */
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -374,7 +404,7 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int flags, const long 
     } catch (const std::exception &) {
         active_ = false;
         running_ = false;
-        SoapySDR::log(SOAPY_SDR_ERROR, "birria: cannot start the stream thread");
+        logError("birria: cannot start the stream thread");
         return SOAPY_SDR_STREAM_ERROR;
     }
     return 0;

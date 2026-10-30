@@ -14,7 +14,7 @@ converts samples to the requested format without resampling.
 | Stream formats | `CS16` (native) and `CF32` |
 | Frequency range | One range per band, from `birriasdr_get_tuning_band()`, so front ends do not offer the gap between bands. The bands match the frequency tuning row of the README [specifications](../README.md#specifications) |
 | Gains | `LNA` 0 to 5, `LPF` 0 to 8 and `DIG` 0 to 12. These are raw codes, not dB. The 5 GHz band needs `LNA` 4 or 5 for full sensitivity |
-| Gain mode | Automatic (the library default) or manual. Automatic mode releases the manual overrides and is not full closed-loop AGC. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected |
+| Gain mode | Automatic (the library default) or manual. Automatic mode releases the manual overrides and is not full closed-loop AGC. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected. In manual mode a refused change keeps the previous code |
 
 Each frequency range is a command interval from the library, not measured RF
 coverage. A band that the board cannot reach is left out. The sample rate can
@@ -84,8 +84,9 @@ dongle at a time, so stop one client before you start another.
 
 A SoapySDR application loads the module when it starts. Set
 `SOAPY_SDR_PLUGIN_PATH` when you launch it, or install the module as the build
-steps describe. The application must link the same SoapySDR version that the
-module builds against, because SoapySDR loads only modules with a matching ABI.
+steps describe. The application must use a SoapySDR library with the same ABI
+version as the one the module builds against, such as `0.8`, because SoapySDR
+loads only modules with a matching ABI. Patch releases keep the ABI.
 
 ```sh
 SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy <application>
