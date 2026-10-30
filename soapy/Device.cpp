@@ -40,6 +40,7 @@ SoapyBirria::SoapyBirria(uint32_t index, const SoapySDR::Kwargs &)
         birriasdr_close(dev_);
         check(rc, "set_recovery");
     }
+    rate_ = birriasdr_get_sample_rate(dev_);
     SoapySDR::logf(SOAPY_SDR_INFO, "birria: opened device %u", index);
 }
 
@@ -184,42 +185,38 @@ SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t,
     return ranges;
 }
 
-/* The hardware rate is fixed at 40 MSps. Lower rates are 40 MSps / N, decimated here. */
-static const unsigned kFactors[] = {1, 2, 4, 5, 8, 10, 16, 20, 40};
+/* Rates the hardware produces without resampling. The library cannot list its
+ * rates, so add one here when the backend gains it.
+ */
+static const double kNativeRates[] = {40e6};
 
-/* Select the decimation factor for the next stream. The rate is idle-only. */
+/* Pass the rate to the library, which validates it. The rate is idle-only, and
+ * the library must not be configured while a read runs.
+ */
 void SoapyBirria::setSampleRate(const int, const size_t, const double rate)
 {
     if (running_) {
         SoapySDR::log(SOAPY_SDR_ERROR, "birria: cannot change the sample rate while streaming");
         return;
     }
-    for (unsigned f : kFactors) {
-        if (std::fabs(rate - kBaseRate / f) < 1.0) {
-            decim_ = f;
-            return;
-        }
-    }
-    SoapySDR::log(SOAPY_SDR_ERROR,
-                  "birria: sample rate must be 40 MSps divided by 1, 2, 4, 5, 8, 10, 16, 20 or 40");
+    if (report(birriasdr_set_sample_rate(dev_, static_cast<uint32_t>(std::llround(rate))),
+               "set_sample_rate"))
+        rate_ = birriasdr_get_sample_rate(dev_);
 }
 
-/* Return the output rate after decimation. */
+/* Return the rate last committed to the library, cached so reads stay safe. */
 double SoapyBirria::getSampleRate(const int, const size_t) const
 {
-    return kBaseRate / decim_;
+    return rate_;
 }
 
-/* List the output rates from lowest to highest. */
+/* List the native rates from lowest to highest. */
 std::vector<double> SoapyBirria::listSampleRates(const int, const size_t) const
 {
-    std::vector<double> rates;
-    for (auto it = std::rbegin(kFactors); it != std::rend(kFactors); ++it)
-        rates.push_back(kBaseRate / *it);
-    return rates;
+    return std::vector<double>(std::begin(kNativeRates), std::end(kNativeRates));
 }
 
-/* Both formats come from the same decimated stream. */
+/* The library delivers CS16. CF32 is a scaled copy. */
 std::vector<std::string> SoapyBirria::getStreamFormats(const int, const size_t) const
 {
     return {SOAPY_SDR_CF32, SOAPY_SDR_CS16};
@@ -230,28 +227,6 @@ std::string SoapyBirria::getNativeStreamFormat(const int, const size_t, double &
 {
     fullScale = 8192.0; /* signed 14-bit samples carried in int16 */
     return SOAPY_SDR_CS16;
-}
-
-/* Windowed-sinc low-pass, Blackman, cutoff at 0.45 of the output rate. */
-void SoapyBirria::buildFilter()
-{
-    taps_.clear();
-    if (decim_ == 1)
-        return;
-    const size_t n = 16 * decim_ + 1;
-    const double fc = 0.45 / decim_; /* cycles per input sample */
-    const double mid = (n - 1) / 2.0;
-    double sum = 0;
-    for (size_t k = 0; k < n; ++k) {
-        const double x = k - mid;
-        const double s = x == 0 ? 2 * fc : std::sin(2 * M_PI * fc * x) / (M_PI * x);
-        const double w = 0.42 - 0.5 * std::cos(2 * M_PI * k / (n - 1)) +
-                         0.08 * std::cos(4 * M_PI * k / (n - 1));
-        taps_.push_back(static_cast<float>(s * w));
-        sum += s * w;
-    }
-    for (auto &t : taps_)
-        t = static_cast<float>(t / sum);
 }
 
 /* Accept one RX stream in CS16 or CF32. The device is the stream handle. */
@@ -289,7 +264,7 @@ void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
         return; /* an empty chunk would read as a gap */
     std::lock_guard<std::mutex> lock(mutex_);
     if (queued_ + count > kMaxQueuedSamples) {
-        overflow_ = true;
+        markGap(); /* the application is not keeping up, so drop these samples */
         return;
     }
     queue_.emplace_back(iq, iq + 2 * static_cast<size_t>(count));
@@ -303,12 +278,21 @@ void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
 void SoapyBirria::onGap()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    queue_.emplace_back();
+    markGap();
+}
+
+/* Queue a gap marker unless one is already last, so markers stay bounded by
+ * the data chunks between them. The caller holds mutex_.
+ */
+void SoapyBirria::markGap()
+{
+    if (queue_.empty() || !queue_.back().empty())
+        queue_.emplace_back();
     cond_.notify_one();
 }
 
-/* Reset the filter and queue, then run the blocking library read on a worker.
- * A worker whose read already ended on its own is joined before replacing it.
+/* Reset the queue, then run the blocking library read on a worker. A worker
+ * whose read already ended on its own is joined before replacing it.
  */
 int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, const size_t)
 {
@@ -316,13 +300,12 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, 
         return 0;
     if (worker_.joinable())
         worker_.join();
-    buildFilter();
-    in_.assign(taps_.empty() ? 0 : 2 * (taps_.size() - 1), 0.0f);
+    current_.clear();
+    offset_ = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         queue_.clear();
         queued_ = 0;
-        overflow_ = false;
     }
     running_ = true;
     worker_ = std::thread([this] {
@@ -348,80 +331,56 @@ int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int, const long long
     return 0;
 }
 
-/* Wait for enough input to fill the request, then filter and decimate it.
- * A gap, or an overflow of this module's queue, returns OVERFLOW and restarts
- * the filter history, so no output sample spans it. Input waiting from before
- * the gap is dropped. A stream that is not running returns STREAM_ERROR.
+/* Copy what is available, up to numElems, converting to the stream format.
+ * Wait only when nothing is ready. A gap ends the read early and returns
+ * OVERFLOW on the next call, so no buffer spans it. A stream that is not
+ * running returns STREAM_ERROR.
  */
 int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t numElems,
                             int &flags, long long &timeNs, const long timeoutUs)
 {
     flags = 0;
     timeNs = 0;
-    const size_t history = taps_.empty() ? 0 : taps_.size() - 1;
-    const size_t need = history + numElems * decim_; /* complex samples */
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::microseconds(timeoutUs);
-
-    while (in_.size() / 2 < need) {
-        std::vector<int16_t> chunk;
-        {
+    size_t count = 0;
+    while (count < numElems) {
+        if (offset_ == current_.size() / 2) {
             std::unique_lock<std::mutex> lock(mutex_);
-            if (queue_.empty() && !overflow_) {
+            if (queue_.empty()) {
+                if (count > 0)
+                    break;
                 if (!running_)
                     return SOAPY_SDR_STREAM_ERROR;
                 if (!cond_.wait_until(lock, deadline,
-                                      [this] { return !queue_.empty() || overflow_ || !running_; }))
+                                      [this] { return !queue_.empty() || !running_; }))
                     return SOAPY_SDR_TIMEOUT;
-                if (queue_.empty() && !overflow_)
-                    continue;
+                if (queue_.empty())
+                    return SOAPY_SDR_STREAM_ERROR;
             }
-            if (overflow_) {
-                overflow_ = false;
-                queue_.clear();
-                queued_ = 0;
-                in_.assign(2 * history, 0.0f); /* restart the filter after a gap */
+            if (queue_.front().empty()) {
+                if (count > 0)
+                    break;
+                queue_.pop_front();
                 return SOAPY_SDR_OVERFLOW;
             }
-            chunk = std::move(queue_.front());
+            current_ = std::move(queue_.front());
             queue_.pop_front();
-            queued_ -= chunk.size() / 2;
+            queued_ -= current_.size() / 2;
+            offset_ = 0;
         }
-        if (chunk.empty()) {
-            in_.assign(2 * history, 0.0f);
-            return SOAPY_SDR_OVERFLOW;
-        }
-        const size_t old = in_.size();
-        in_.resize(old + chunk.size());
-        for (size_t i = 0; i < chunk.size(); ++i)
-            in_[old + i] = chunk[i];
-    }
-
-    const size_t outCount = std::min(numElems, (in_.size() / 2 - history) / decim_);
-    constexpr float kScale = 1.0f / 8192.0f;
-    float *outF = static_cast<float *>(buffs[0]);
-    int16_t *outS = static_cast<int16_t *>(buffs[0]);
-    for (size_t o = 0; o < outCount; ++o) {
-        float ar, ai;
-        if (taps_.empty()) {
-            ar = in_[2 * o];
-            ai = in_[2 * o + 1];
-        } else {
-            const float *p = &in_[2 * o * decim_];
-            ar = ai = 0;
-            for (size_t k = 0; k < taps_.size(); ++k) {
-                ar += taps_[k] * p[2 * k];
-                ai += taps_[k] * p[2 * k + 1];
-            }
-        }
+        const size_t n = std::min(current_.size() / 2 - offset_, numElems - count);
+        const int16_t *in = &current_[2 * offset_];
         if (cs16_) {
-            outS[2 * o] = static_cast<int16_t>(std::lrintf(ar));
-            outS[2 * o + 1] = static_cast<int16_t>(std::lrintf(ai));
+            std::memcpy(static_cast<int16_t *>(buffs[0]) + 2 * count, in, 4 * n);
         } else {
-            outF[2 * o] = ar * kScale;
-            outF[2 * o + 1] = ai * kScale;
+            constexpr float kScale = 1.0f / 8192.0f;
+            float *out = static_cast<float *>(buffs[0]) + 2 * count;
+            for (size_t k = 0; k < 2 * n; ++k)
+                out[k] = in[k] * kScale;
         }
+        count += n;
+        offset_ += n;
     }
-    in_.erase(in_.begin(), in_.begin() + 2 * outCount * decim_);
-    return static_cast<int>(outCount);
+    return static_cast<int>(count);
 }

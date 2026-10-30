@@ -15,9 +15,9 @@
 #include <vector>
 
 /* SoapySDR device for libbirriasdr. Settings that the library supports are
- * wired up. An RX stream runs birriasdr_read_async on a worker thread into a
- * queue, and the reader side decimates by an integer factor because the
- * hardware rate is fixed at 40 MSps.
+ * wired up, and only native hardware rates are offered. An RX stream runs
+ * birriasdr_read_async on a worker thread into a queue, and the reader side
+ * converts to CS16 or CF32 without resampling.
  */
 class SoapyBirria : public SoapySDR::Device
 {
@@ -76,16 +76,15 @@ private:
     static void recoveryCallback(const birriasdr_recovery_event *event, void *ctx);
     void onSamples(const int16_t *iq, uint32_t count);
     void onGap();
-    void buildFilter();
+    void markGap();
 
-    static constexpr double kBaseRate = 40e6;
     static constexpr size_t kMaxQueuedSamples = 16u << 20; /* complex samples, ~64 MiB */
     static constexpr uint32_t kMaxRestarts = 3; /* device or transport faults per stream */
 
     birriasdr_dev_t *dev_ = nullptr;
     birriasdr_gain gain_{2, 8, 0};
     bool cs16_ = false;
-    unsigned decim_ = 8; /* default 5 MSps */
+    double rate_ = 0;
 
     std::thread worker_;
     std::atomic<bool> running_{false};
@@ -93,10 +92,9 @@ private:
     std::condition_variable cond_;
     std::deque<std::vector<int16_t>> queue_; /* an empty chunk marks a gap */
     size_t queued_ = 0;
-    bool overflow_ = false;
 
-    std::vector<float> taps_;
-    std::vector<float> in_; /* history followed by new samples, interleaved I,Q floats */
+    std::vector<int16_t> current_; /* chunk being read, owned by the reader */
+    size_t offset_ = 0;            /* complex samples already read from current_ */
 };
 
 #endif

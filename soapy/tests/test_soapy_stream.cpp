@@ -3,8 +3,8 @@
  * Explicit hardware test of the SoapySDR module, never run automatically by CTest.
  *
  * test_soapy_stream <freq_hz> <rate> <seconds> [out.cf32]: capture through the
- * module and report the averaged spectrum peak, to check decimation and the
- * frequency axis.
+ * module and report the averaged spectrum peak, to check the frequency axis
+ * and the sample format.
  */
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Formats.h>
