@@ -72,52 +72,28 @@ The `mt7921u` kernel driver must not be bound to the dongle. A run under
 cannot open the device until those are removed. Only one program can open the
 dongle at a time, so stop one client before you start another.
 
-## CubicSDR
+## Using the module from an application
 
-CubicSDR links SoapySDR directly, so it loads the module with no rebuild when
-the versions match. On Debian the packaged `cubicsdr` links the system
-SoapySDR, the same version the module builds against.
-
-```sh
-SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy CubicSDR
-```
-
-In the device dialog, pick the COMFAST or MediaTek entry and press Start. Turn AGC off to
-use the `LNA`, `LPF` and `DIG` sliders. A reasonable start is `LNA` 2, `LPF` 8
-and `DIG` 0. CubicSDR cannot demodulate Wi-Fi, so treat it as a spectrum and
-waterfall view.
-
-## SDR++ server and a remote client
-
-An SDR++ server can own the dongle on a desktop and stream to SDR++ clients,
-including the Android app. The server needs the SoapySDR source module, which
-some distributions omit from their package. Where it is missing, build SDR++
-from source with `-DOPT_BUILD_SOAPY_SOURCE=ON` and follow the project's build
-instructions.
-
-Add a SoapySDR source instance to `~/.config/sdrpp/config.json` and select it
-as the source:
-
-```json
-"moduleInstances": {
-    "SoapySDR Source": { "module": "soapy_source", "enabled": true }
-},
-"source": "SoapySDR"
-```
-
-Start the server with the plugin path set:
+A SoapySDR application loads the module when it starts. Set
+`SOAPY_SDR_PLUGIN_PATH` when you launch it, or install the module as the build
+steps describe. The application must link the same SoapySDR version that the
+module builds against, because SoapySDR loads only modules with a matching ABI.
 
 ```sh
-SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy sdrpp --server --addr 0.0.0.0 --port 5259
+SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy <application>
 ```
 
-From a client, choose the SDR++ server source, enter the desktop address and
-port 5259, and connect. In the server's source menu pick the birria device and
-a sample rate. The sample rate sets the waterfall span. A good start is 5 MSps.
-Higher rates need a network link that keeps up. For a remote client, set
-the sample type to int8 and turn compression on to reduce bandwidth. Enter
-frequencies in Hz, for example `2437000000` for Wi-Fi channel 6, and use mode
-RAW because SDR++ cannot demodulate Wi-Fi.
+Select the `driver=birria` device in the application's device list. Turn
+automatic gain off to use the `LNA`, `LPF` and `DIG` controls. A reasonable
+start is `LNA` 2, `LPF` 8 and `DIG` 0, or `LNA` 4 in the 5 GHz band. The sample
+rate sets the visible span, and 5 MSps is a good start. Enter frequencies in
+Hz, for example `2437000000` for Wi-Fi channel 6. General-purpose SDR
+applications cannot demodulate Wi-Fi, so use their spectrum, waterfall or raw
+I/Q views.
+
+An application that serves the stream over a network needs a link that carries
+the selected rate. Each complex sample takes 4 bytes in `CS16` and 8 bytes in
+`CF32`, so 5 MSps needs 20 MB/s in `CS16`.
 
 ## Manual stream test
 

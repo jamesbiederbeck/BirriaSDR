@@ -18,7 +18,7 @@ static void check(int result, const char *what)
 }
 
 /* Setters called while an application runs log a refusal instead of throwing:
- * some front ends (SDR++) do not catch exceptions from these calls and abort.
+ * some front ends do not catch exceptions from these calls and abort.
  */
 static bool report(int result, const char *what)
 {
