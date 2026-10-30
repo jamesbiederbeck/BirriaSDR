@@ -65,11 +65,13 @@ std::vector<std::string> SoapyBirria::listGains(const int, const size_t) const
     return {"LNA", "LPF", "DIG"};
 }
 
-/* Code limits for each gain element, in steps of one. */
+/* Code limits for each gain element, in steps of one. The library accepts LNA
+ * 0 to 5, and 5 GHz needs 4 or 5 for full sensitivity.
+ */
 SoapySDR::Range SoapyBirria::getGainRange(const int, const size_t, const std::string &name) const
 {
     if (name == "LNA")
-        return SoapySDR::Range(0, 3, 1);
+        return SoapySDR::Range(0, 5, 1);
     if (name == "LPF")
         return SoapySDR::Range(0, 8, 1);
     if (name == "DIG")
@@ -149,17 +151,29 @@ std::vector<std::string> SoapyBirria::listFrequencies(const int, const size_t) c
     return {"RF"};
 }
 
-/* Report the library's command limits as a single range. */
+/* Report one range per contiguous band, so front ends cannot offer the gaps
+ * between them. A band this board cannot reach returns UNSUPPORTED and is
+ * skipped. INVALID marks the end of the list.
+ */
 SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t,
                                                    const std::string &) const
 {
-    uint64_t minimum = 0, maximum = 0;
-    const int rc = birriasdr_get_tuning_range(dev_, &minimum, &maximum);
-    if (rc != 0) {
-        report(rc, "get_tuning_range");
-        return {};
+    SoapySDR::RangeList ranges;
+    for (uint32_t index = 0;; ++index) {
+        uint64_t minimum = 0, maximum = 0;
+        const int rc = birriasdr_get_tuning_band(dev_, index, &minimum, &maximum);
+        if (rc == BIRRIASDR_ERROR_INVALID)
+            break;
+        if (rc == BIRRIASDR_ERROR_UNSUPPORTED)
+            continue;
+        if (rc != 0) {
+            report(rc, "get_tuning_band");
+            break;
+        }
+        ranges.push_back(
+            SoapySDR::Range(static_cast<double>(minimum), static_cast<double>(maximum)));
     }
-    return {SoapySDR::Range(static_cast<double>(minimum), static_cast<double>(maximum))};
+    return ranges;
 }
 
 /* The hardware rate is fixed at 40 MSps. Lower rates are 40 MSps / N, decimated here. */

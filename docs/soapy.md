@@ -12,17 +12,16 @@ the requested rate with a host-side filter.
 | Driver key | `driver=birria`. A dongle is selected by enumeration order with `index=N` |
 | Sample rates | 40 MSps divided by 1, 2, 4, 5, 8, 10, 16, 20 or 40, giving 40 MSps down to 1 MSps. The dongle always runs at 40 MSps and the module decimates with a host-side filter |
 | Stream formats | `CS16` (native) and `CF32` |
-| Frequency range | The library's reported tuning range, from `birriasdr_get_tuning_range()`. On a current board that is 2156 to 2610 MHz |
-| Gains | `LNA` 0 to 3, `LPF` 0 to 8 and `DIG` 0 to 12. These are raw codes, not dB |
+| Frequency range | One range per band, from `birriasdr_get_tuning_band()`, so front ends do not offer the gap between bands. The bands match the frequency tuning row of the README [specifications](../README.md#specifications) |
+| Gains | `LNA` 0 to 5, `LPF` 0 to 8 and `DIG` 0 to 12. These are raw codes, not dB. The 5 GHz band needs `LNA` 4 or 5 for full sensitivity |
 | Gain mode | Automatic (the library default) or manual. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected |
 
 Errors from tuning, sample-rate changes and gain changes are logged, not
 thrown, because some front ends do not catch exceptions from these calls and
 would abort. A rejected frequency leaves the receiver where it was.
 
-This module exposes the single tuning range the library reports on `main`.
-Multi-band tuning (5 GHz and 6 GHz) and per-band overrides ride on a separate
-library branch and are planned as a follow-up once that work lands.
+Each range is a command interval from the library, not measured RF coverage.
+A band that the board cannot reach is left out.
 
 ## Build
 
