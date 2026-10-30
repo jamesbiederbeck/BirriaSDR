@@ -55,22 +55,44 @@ static void accumulate(const std::complex<float> *frame, std::vector<double> &ps
         psd[(k + kFrame / 2) % kFrame] += std::norm(x[k]);
 }
 
+/* Print why the capture failed, release the device and return failure. */
+static int fail(SoapySDR::Device *dev, FILE *out, const char *why)
+{
+    fprintf(stderr, "test_soapy_stream: %s\n", why);
+    if (out)
+        fclose(out);
+    SoapySDR::Device::unmake(dev);
+    return 1;
+}
+
+/* Capture, check that the module applied the request and report the averaged
+ * spectrum. Any capture or file error returns failure.
+ */
 int main(int argc, char **argv)
 {
     if (argc < 4)
         return 2;
-    const double freq = atof(argv[1]), rate = atof(argv[2]), secs = atof(argv[3]);
+    const double freq = atof(argv[1]), requested = atof(argv[2]), secs = atof(argv[3]);
     auto *dev = SoapySDR::Device::make("driver=birria");
-    dev->setSampleRate(SOAPY_SDR_RX, 0, rate);
+    dev->setSampleRate(SOAPY_SDR_RX, 0, requested);
     dev->setFrequency(SOAPY_SDR_RX, 0, freq);
+    const double rate = dev->getSampleRate(SOAPY_SDR_RX, 0);
+    if (std::fabs(rate - requested) > 1.0)
+        return fail(dev, nullptr, "the module refused the sample rate");
+    if (std::fabs(dev->getFrequency(SOAPY_SDR_RX, 0) - freq) > 1.0)
+        return fail(dev, nullptr, "the module refused the frequency");
+    FILE *out = nullptr;
+    if (argc > 4 && !(out = fopen(argv[4], "wb")))
+        return fail(dev, nullptr, "cannot open the output file");
     auto *st = dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32);
-    dev->activateStream(st);
+    if (dev->activateStream(st) != 0)
+        return fail(dev, out, "cannot activate the stream");
 
     std::vector<std::complex<float>> buf(65536), pend;
     std::vector<double> psd(kFrame, 0.0);
     size_t total = 0, frames = 0, overflows = 0, errs = 0;
-    FILE *out = argc > 4 ? fopen(argv[4], "wb") : nullptr;
-    while (total < rate * secs) {
+    bool written = true;
+    while (total < rate * secs && errs <= 20 && written) {
         void *b[] = {buf.data()};
         int flags = 0;
         long long t = 0;
@@ -80,13 +102,12 @@ int main(int argc, char **argv)
             continue;
         }
         if (n < 0) {
-            if (++errs > 20)
-                break;
+            errs++;
             continue;
         }
         total += n;
         if (out)
-            fwrite(buf.data(), 8, n, out);
+            written = fwrite(buf.data(), 8, n, out) == static_cast<size_t>(n);
         pend.insert(pend.end(), buf.begin(), buf.begin() + n);
         while (pend.size() >= kFrame) {
             accumulate(pend.data(), psd);
@@ -96,6 +117,13 @@ int main(int argc, char **argv)
     }
     dev->deactivateStream(st);
     dev->closeStream(st);
+    if (errs > 20)
+        return fail(dev, out, "too many read errors");
+    if (!written)
+        return fail(dev, out, "cannot write the output file");
+    if (out && fclose(out) != 0)
+        return fail(dev, nullptr, "cannot close the output file");
+    out = nullptr;
 
     size_t best = 0;
     double floor = 0;
@@ -106,9 +134,12 @@ int main(int argc, char **argv)
     }
     floor /= kFrame;
     printf("samples %zu overflows %zu frames %zu\n", total, overflows, frames);
+    if (frames == 0 || floor <= 0)
+        return fail(dev, nullptr, "no signal captured");
     printf("peak at %+.2f MHz, %.1f dB over mean; edge bins %.1f / %.1f dB vs mean\n",
            (static_cast<double>(best) - kFrame / 2.0) * rate / kFrame / 1e6,
            10 * log10(psd[best] / floor), 10 * log10(psd[8] / floor),
            10 * log10(psd[kFrame - 8] / floor));
     SoapySDR::Device::unmake(dev);
+    return 0;
 }
