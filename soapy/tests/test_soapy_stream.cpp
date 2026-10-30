@@ -8,6 +8,7 @@
  */
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Formats.h>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -91,8 +92,14 @@ int main(int argc, char **argv)
     std::vector<std::complex<float>> buf(65536), pend;
     std::vector<double> psd(kFrame, 0.0);
     size_t total = 0, frames = 0, overflows = 0, errs = 0;
-    bool written = true;
+    bool written = true, stalled = false;
+    /* Gaps alone do not count as errors, so also stop when no samples arrive. */
+    auto progress = std::chrono::steady_clock::now();
     while (total < rate * secs && errs <= 20 && written) {
+        if (std::chrono::steady_clock::now() - progress > std::chrono::seconds(5)) {
+            stalled = true;
+            break;
+        }
         void *b[] = {buf.data()};
         int flags = 0;
         long long t = 0;
@@ -106,6 +113,8 @@ int main(int argc, char **argv)
             continue;
         }
         total += n;
+        if (n > 0)
+            progress = std::chrono::steady_clock::now();
         if (out)
             written = fwrite(buf.data(), 8, n, out) == static_cast<size_t>(n);
         pend.insert(pend.end(), buf.begin(), buf.begin() + n);
@@ -119,6 +128,8 @@ int main(int argc, char **argv)
     dev->closeStream(st);
     if (errs > 20)
         return fail(dev, out, "too many read errors");
+    if (stalled)
+        return fail(dev, out, "no samples arrived for five seconds");
     if (!written)
         return fail(dev, out, "cannot write the output file");
     if (out && fclose(out) != 0)
