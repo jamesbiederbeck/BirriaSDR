@@ -29,10 +29,17 @@ would abort. A rejected frequency leaves the receiver where it was.
 The module enables the library's automatic recovery, so a stream keeps running
 across overruns. Each gap reaches the application as `SOAPY_SDR_OVERFLOW` from
 the read call, and the samples that follow are not continuous with the ones
-before it. The number of missing samples is unknown. Clean overruns always
-recover. Other device or transport faults get three restarts per stream, after
-which reads return `SOAPY_SDR_STREAM_ERROR` and the module logs the cause. A
-stream that is not running also returns `SOAPY_SDR_STREAM_ERROR`.
+before it. The number of missing samples is unknown. A read returns the samples
+from before a gap first, and the next read reports the gap.
+
+Clean overruns recover without limit. An overrun with a failed reset or DMA
+error, a USB I/O error, a timeout or a failed live control update gets up to
+three restarts per stream. Other errors, such as a lost device or corrupted
+packets, end the stream at once. When the stream ends, reads return
+`SOAPY_SDR_STREAM_ERROR` after the remaining samples and the module logs the
+cause. Before activation and after deactivation, reads wait for the timeout and
+return `SOAPY_SDR_TIMEOUT`. One stream can be open at a time, and timed starts,
+timed stops and finite bursts return `SOAPY_SDR_NOT_SUPPORTED`.
 
 ## Build
 

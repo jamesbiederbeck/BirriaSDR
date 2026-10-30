@@ -25,7 +25,9 @@ public:
     SoapyBirria(uint32_t index, const SoapySDR::Kwargs &args);
     ~SoapyBirria() override;
 
+    /* The key applications pass as driver=birria. */
     std::string getDriverKey() const override { return "birria"; }
+    /* The chipset family that the library backend drives. */
     std::string getHardwareKey() const override { return "MT7921"; }
     SoapySDR::Kwargs getHardwareInfo() const override;
 
@@ -82,12 +84,15 @@ private:
     static constexpr uint32_t kMaxRestarts = 3; /* device or transport faults per stream */
 
     birriasdr_dev_t *dev_ = nullptr;
+    mutable std::mutex gainMutex_; /* guards gain_ across concurrent gain calls */
     birriasdr_gain gain_{2, 8, 0};
+    bool streamOpen_ = false;
     bool cs16_ = false;
     double rate_ = 0;
 
     std::thread worker_;
-    std::atomic<bool> running_{false};
+    std::atomic<bool> active_{false};  /* between activateStream and deactivateStream */
+    std::atomic<bool> running_{false}; /* the worker's library read has not returned */
     std::mutex mutex_;
     std::condition_variable cond_;
     std::deque<std::vector<int16_t>> queue_; /* an empty chunk marks a gap */

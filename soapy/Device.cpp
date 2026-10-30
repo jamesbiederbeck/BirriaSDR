@@ -96,9 +96,12 @@ bool SoapyBirria::hasGainMode(const int, const size_t) const
     return true;
 }
 
-/* Switch modes, then send the stored codes when entering manual mode. */
+/* Switch modes, then send the stored codes when entering manual mode. The
+ * gain lock keeps the codes consistent with concurrent gain calls.
+ */
 void SoapyBirria::setGainMode(const int, const size_t, const bool automatic)
 {
+    std::lock_guard<std::mutex> lock(gainMutex_);
     if (report(birriasdr_set_tuner_gain_mode(dev_, automatic ? 0 : 1), "set_tuner_gain_mode") &&
         !automatic)
         report(birriasdr_set_gain_codes(dev_, &gain_), "set_gain_codes");
@@ -118,6 +121,7 @@ void SoapyBirria::setGain(const int, const size_t, const std::string &name, cons
     const auto range = getGainRange(SOAPY_SDR_RX, 0, name);
     const uint8_t code = static_cast<uint8_t>(
         std::lround(std::clamp(value, range.minimum(), range.maximum())));
+    std::lock_guard<std::mutex> lock(gainMutex_);
     if (name == "LNA")
         gain_.lna = code;
     else if (name == "LPF")
@@ -131,6 +135,7 @@ void SoapyBirria::setGain(const int, const size_t, const std::string &name, cons
 /* Return the stored code, which the library may not have applied yet. */
 double SoapyBirria::getGain(const int, const size_t, const std::string &name) const
 {
+    std::lock_guard<std::mutex> lock(gainMutex_);
     if (name == "LNA")
         return gain_.lna;
     if (name == "LPF")
@@ -229,20 +234,29 @@ std::string SoapyBirria::getNativeStreamFormat(const int, const size_t, double &
     return SOAPY_SDR_CS16;
 }
 
-/* Accept one RX stream in CS16 or CF32. The device is the stream handle. */
+/* Accept one RX stream on channel 0 in CS16 or CF32. The device is the stream
+ * handle, so a second stream would change the format under the first.
+ */
 SoapySDR::Stream *SoapyBirria::setupStream(const int direction, const std::string &format,
-                                           const std::vector<size_t> &, const SoapySDR::Kwargs &)
+                                           const std::vector<size_t> &channels,
+                                           const SoapySDR::Kwargs &)
 {
     if (direction != SOAPY_SDR_RX || (format != SOAPY_SDR_CS16 && format != SOAPY_SDR_CF32))
         throw std::runtime_error("birria: only RX CF32 and CS16 streams are supported");
+    if (channels.size() > 1 || (channels.size() == 1 && channels[0] != 0))
+        throw std::runtime_error("birria: only channel 0 is supported");
+    if (streamOpen_)
+        throw std::runtime_error("birria: close the open stream before setting up another");
     cs16_ = format == SOAPY_SDR_CS16;
+    streamOpen_ = true;
     return reinterpret_cast<SoapySDR::Stream *>(this);
 }
 
-/* Stop the stream if it is running. */
+/* Stop the stream if it is running, then allow a new one. */
 void SoapyBirria::closeStream(SoapySDR::Stream *)
 {
     deactivateStream(nullptr);
+    streamOpen_ = false;
 }
 
 /* Forward the library callback to the device instance. */
@@ -292,10 +306,14 @@ void SoapyBirria::markGap()
 }
 
 /* Reset the queue, then run the blocking library read on a worker. A worker
- * whose read already ended on its own is joined before replacing it.
+ * whose read already ended on its own is joined before replacing it. Timed
+ * starts and finite bursts are not supported.
  */
-int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, const size_t)
+int SoapyBirria::activateStream(SoapySDR::Stream *, const int flags, const long long,
+                                const size_t numElems)
 {
+    if ((flags & (SOAPY_SDR_HAS_TIME | SOAPY_SDR_END_BURST)) || numElems != 0)
+        return SOAPY_SDR_NOT_SUPPORTED;
     if (running_)
         return 0;
     if (worker_.joinable())
@@ -307,10 +325,15 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, 
         queue_.clear();
         queued_ = 0;
     }
+    active_ = true;
     running_ = true;
     worker_ = std::thread([this] {
         report(birriasdr_read_async(dev_, &SoapyBirria::asyncCallback, this, 0, 0), "read_async");
-        running_ = false;
+        {
+            /* Publish under the lock so a reader cannot miss the wakeup. */
+            std::lock_guard<std::mutex> lock(mutex_);
+            running_ = false;
+        }
         cond_.notify_all();
     });
     return 0;
@@ -318,23 +341,31 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, 
 
 /* Cancel the library read and join its worker. Right after activation the
  * worker may not have started the read yet, and cancel returns STATE, so keep
- * retrying until the read accepts it or the worker has finished.
+ * retrying until the read accepts it or the worker has finished. Samples still
+ * queued are discarded. A timed stop is not supported.
  */
-int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int, const long long)
+int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int flags, const long long)
 {
+    if (flags & SOAPY_SDR_HAS_TIME)
+        return SOAPY_SDR_NOT_SUPPORTED;
+    active_ = false;
     if (worker_.joinable()) {
         while (birriasdr_cancel_async(dev_) == BIRRIASDR_ERROR_STATE && running_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         worker_.join();
     }
     running_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.clear();
+    queued_ = 0;
     return 0;
 }
 
 /* Copy what is available, up to numElems, converting to the stream format.
  * Wait only when nothing is ready. A gap ends the read early and returns
- * OVERFLOW on the next call, so no buffer spans it. A stream that is not
- * running returns STREAM_ERROR.
+ * OVERFLOW on the next call, so no buffer spans it. An inactive stream waits
+ * for the timeout and returns TIMEOUT, as SoapySDR requires. An active stream
+ * whose read has ended returns STREAM_ERROR once its samples are drained.
  */
 int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t numElems,
                             int &flags, long long &timeNs, const long timeoutUs)
@@ -343,6 +374,10 @@ int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t
     timeNs = 0;
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::microseconds(timeoutUs);
+    if (!active_) {
+        std::this_thread::sleep_until(deadline);
+        return SOAPY_SDR_TIMEOUT;
+    }
     size_t count = 0;
     while (count < numElems) {
         if (offset_ == current_.size() / 2) {
@@ -350,13 +385,11 @@ int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t
             if (queue_.empty()) {
                 if (count > 0)
                     break;
-                if (!running_)
-                    return SOAPY_SDR_STREAM_ERROR;
-                if (!cond_.wait_until(lock, deadline,
-                                      [this] { return !queue_.empty() || !running_; }))
+                if (running_ && !cond_.wait_until(lock, deadline,
+                                                  [this] { return !queue_.empty() || !running_; }))
                     return SOAPY_SDR_TIMEOUT;
                 if (queue_.empty())
-                    return SOAPY_SDR_STREAM_ERROR;
+                    return active_ ? SOAPY_SDR_STREAM_ERROR : SOAPY_SDR_TIMEOUT;
             }
             if (queue_.front().empty()) {
                 if (count > 0)
