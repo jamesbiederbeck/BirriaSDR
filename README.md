@@ -159,9 +159,9 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 A SoapySDR module (`driver=birria`) lets any SoapySDR application use the
 dongle, such as CubicSDR or an SDR++ server. It builds automatically when
-SoapySDR is installed and is written to `build/soapy/`. See
-[`docs/soapy.md`](docs/soapy.md) for the supported settings and client
-walkthroughs. Pass `-DBIRRIASDR_SOAPY=OFF` to skip it.
+SoapySDR is installed and is written to `build/soapy/`. The
+[SoapySDR module guide](docs/soapy.md) lists the supported settings and walks
+through CubicSDR and SDR++. Pass `-DBIRRIASDR_SOAPY=OFF` to skip it.
 
 ## API
 

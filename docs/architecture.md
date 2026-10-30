@@ -23,7 +23,7 @@ and the [MT7921 device reference](mt7921.md).
 | `tools/rebuild_firmware.py` | Optional rebuild and verification of the header from the assembly |
 | `tools/99-birriasdr.rules` | Linux udev rule that lets the `plugdev` group open both supported IDs |
 | `soapy/Registration.cpp` | SoapySDR enumeration from USB descriptors and registration of `driver=birria` |
-| `soapy/Device.cpp` | SoapySDR settings, the stream worker thread and host-side decimation of the fixed 40 MSps stream |
+| `soapy/Device.cpp` | SoapySDR settings, the stream worker thread, gap reporting and host-side decimation of the fixed 40 MSps stream |
 | `soapy/tests/test_soapy_stream.cpp` | Explicit hardware capture through the module, not registered with CTest |
 
 The common reader consumes the event and mailbox protocol of our original

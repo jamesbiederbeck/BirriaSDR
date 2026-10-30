@@ -16,6 +16,12 @@ the requested rate with a host-side filter.
 | Gains | `LNA` 0 to 5, `LPF` 0 to 8 and `DIG` 0 to 12. These are raw codes, not dB. The 5 GHz band needs `LNA` 4 or 5 for full sensitivity |
 | Gain mode | Automatic (the library default) or manual. Gain codes apply only in manual mode. In automatic mode they are stored and sent once manual mode is selected |
 
+Each frequency range is a command interval from the library, not measured RF
+coverage. A band that the board cannot reach is left out. The sample rate can
+change only while the stream is stopped, and a rate outside the list is
+refused. The module has no hardware timestamps, no serial number, no bandwidth
+control and no sensors.
+
 Errors from tuning, sample-rate changes and gain changes are logged, not
 thrown, because some front ends do not catch exceptions from these calls and
 would abort. A rejected frequency leaves the receiver where it was.
@@ -28,15 +34,12 @@ recover. Other device or transport faults get three restarts per stream, after
 which reads return `SOAPY_SDR_STREAM_ERROR` and the module logs the cause. A
 stream that is not running also returns `SOAPY_SDR_STREAM_ERROR`.
 
-Each range is a command interval from the library, not measured RF coverage.
-A band that the board cannot reach is left out.
-
 ## Build
 
 The module builds as part of the normal BirriaSDR build whenever SoapySDR is
 installed. No extra flag is needed:
 
-```
+```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
@@ -48,14 +51,14 @@ SoapySDR is not installed, CMake prints a note and skips the module. Pass
 
 Check that SoapySDR finds the dongle:
 
-```
+```sh
 SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy SoapySDRUtil --find=driver=birria
 ```
 
 Every command below sets `SOAPY_SDR_PLUGIN_PATH`. To avoid that, install the
 module into the system module directory:
 
-```
+```sh
 sudo cmake --install build
 ```
 
@@ -75,11 +78,11 @@ CubicSDR links SoapySDR directly, so it loads the module with no rebuild when
 the versions match. On Debian the packaged `cubicsdr` links the system
 SoapySDR, the same version the module builds against.
 
-```
+```sh
 SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy CubicSDR
 ```
 
-In the device dialog, pick the MediaTek entry and press Start. Turn AGC off to
+In the device dialog, pick the COMFAST or MediaTek entry and press Start. Turn AGC off to
 use the `LNA`, `LPF` and `DIG` sliders. A reasonable start is `LNA` 2, `LPF` 8
 and `DIG` 0. CubicSDR cannot demodulate Wi-Fi, so treat it as a spectrum and
 waterfall view.
@@ -104,14 +107,14 @@ as the source:
 
 Start the server with the plugin path set:
 
-```
+```sh
 SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy sdrpp --server --addr 0.0.0.0 --port 5259
 ```
 
 From a client, choose the SDR++ server source, enter the desktop address and
 port 5259, and connect. In the server's source menu pick the birria device and
-a sample rate. The sample rate sets the waterfall span. A good start is 5 MSps,
-and 10 or 20 MSps work when the network link keeps up. For a remote client, set
+a sample rate. The sample rate sets the waterfall span. A good start is 5 MSps.
+Higher rates need a network link that keeps up. For a remote client, set
 the sample type to int8 and turn compression on to reduce bandwidth. Enter
 frequencies in Hz, for example `2437000000` for Wi-Fi channel 6, and use mode
 RAW because SDR++ cannot demodulate Wi-Fi.
