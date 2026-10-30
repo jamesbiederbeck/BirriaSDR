@@ -35,9 +35,12 @@ SoapyBirria::SoapyBirria(uint32_t index, const SoapySDR::Kwargs &)
     SoapySDR::logf(SOAPY_SDR_INFO, "birria: opened device %u", index);
 }
 
-/* Release the library handle. */
+/* Stop any stream first: the library requires the reader to be joined before
+ * close, and destroying a joinable thread terminates the process.
+ */
 SoapyBirria::~SoapyBirria()
 {
+    deactivateStream(nullptr);
     if (dev_)
         birriasdr_close(dev_);
 }
@@ -266,11 +269,15 @@ void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
     cond_.notify_one();
 }
 
-/* Reset the filter and queue, then run the blocking library read on a worker. */
+/* Reset the filter and queue, then run the blocking library read on a worker.
+ * A worker whose read already ended on its own is joined before replacing it.
+ */
 int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, const size_t)
 {
     if (running_)
         return 0;
+    if (worker_.joinable())
+        worker_.join();
     buildFilter();
     in_.assign(taps_.empty() ? 0 : 2 * (taps_.size() - 1), 0.0f);
     {
@@ -290,11 +297,15 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, 
     return 0;
 }
 
-/* Cancel the library read and join its worker. */
+/* Cancel the library read and join its worker. Right after activation the
+ * worker may not have started the read yet, and cancel returns STATE, so keep
+ * retrying until the read accepts it or the worker has finished.
+ */
 int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int, const long long)
 {
     if (worker_.joinable()) {
-        birriasdr_cancel_async(dev_);
+        while (birriasdr_cancel_async(dev_) == BIRRIASDR_ERROR_STATE && running_)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         worker_.join();
     }
     running_ = false;
