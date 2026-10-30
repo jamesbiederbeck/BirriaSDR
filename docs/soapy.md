@@ -54,13 +54,8 @@ sudo cmake --install build
 
 ## USB access without root
 
-The `tools/99-birriasdr.rules` file lets the `plugdev` group open both
-supported IDs. Copy it into place, reload the rules and replug the dongle:
-
-```
-sudo cp tools/99-birriasdr.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
+Install the udev rule as the [build steps](../README.md#build-and-try)
+describe, so the `plugdev` group can open the dongle without `sudo`.
 
 The `mt7921u` kernel driver must not be bound to the dongle. A run under
 `sudo` can leave root-owned lock files in `/tmp`, and a later unprivileged run
@@ -116,13 +111,13 @@ RAW because SDR++ cannot demodulate Wi-Fi.
 
 ## Manual stream test
 
-The `soapy/tests/test_stream.cpp` program captures through the module and
+The `soapy/tests/test_soapy_stream.cpp` program captures through the module and
 reports the averaged spectrum peak, to check decimation and the frequency axis.
-CMake does not build it:
+It builds with the module when testing is enabled, but CTest does not run it
+because it needs a dongle:
 
-```
-g++ -O2 -o build/test_stream soapy/tests/test_stream.cpp -lSoapySDR
-SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy build/test_stream <freq_hz> <rate> <seconds> [out.cf32]
+```sh
+SOAPY_SDR_PLUGIN_PATH=$PWD/build/soapy build/soapy/test_soapy_stream <freq_hz> <rate> <seconds> [out.cf32]
 ```
 
 To reproduce an application's problem, replay its call sequence against the

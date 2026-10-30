@@ -10,3 +10,11 @@ SOAPY_SDR_MODULE_UTIL(
     LIBRARIES birriasdr
 )
 target_include_directories(birriaSupport PRIVATE ${PROJECT_SOURCE_DIR}/include)
+
+# Explicit hardware test of the module. Deliberately not registered with CTest:
+# it opens a physical dongle.
+if(BUILD_TESTING)
+    add_executable(test_soapy_stream tests/test_soapy_stream.cpp)
+    target_include_directories(test_soapy_stream PRIVATE ${SoapySDR_INCLUDE_DIRS})
+    target_link_libraries(test_soapy_stream PRIVATE ${SoapySDR_LIBRARIES})
+endif()

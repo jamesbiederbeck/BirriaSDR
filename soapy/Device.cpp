@@ -9,10 +9,12 @@
 #include <cstring>
 #include <stdexcept>
 
+/* Construction has no front end to report to, so a failed open throws. */
 static void check(int result, const char *what)
 {
     if (result != 0)
-        throw std::runtime_error(std::string("birriasdr: ") + what + " failed (" + std::to_string(result) + ")");
+        throw std::runtime_error(std::string("birriasdr: ") + what + " failed (" +
+                                 std::to_string(result) + ")");
 }
 
 /* Setters called while an application runs log a refusal instead of throwing:
@@ -21,22 +23,26 @@ static void check(int result, const char *what)
 static bool report(int result, const char *what)
 {
     if (result != 0)
-        SoapySDR::logf(SOAPY_SDR_ERROR, "birria: %s failed: %s (%d)", what, birriasdr_strerror(result), result);
+        SoapySDR::logf(SOAPY_SDR_ERROR, "birria: %s failed: %s (%d)", what,
+                       birriasdr_strerror(result), result);
     return result == 0;
 }
 
+/* Open the dongle at its enumeration index. Device arguments are not used. */
 SoapyBirria::SoapyBirria(uint32_t index, const SoapySDR::Kwargs &)
 {
     check(birriasdr_open(&dev_, index), "open");
     SoapySDR::logf(SOAPY_SDR_INFO, "birria: opened device %u", index);
 }
 
+/* Release the library handle. */
 SoapyBirria::~SoapyBirria()
 {
     if (dev_)
         birriasdr_close(dev_);
 }
 
+/* Warn front ends that the gains are raw codes. */
 SoapySDR::Kwargs SoapyBirria::getHardwareInfo() const
 {
     SoapySDR::Kwargs info;
@@ -44,6 +50,7 @@ SoapySDR::Kwargs SoapyBirria::getHardwareInfo() const
     return info;
 }
 
+/* The receiver has one RX channel and no TX path. */
 size_t SoapyBirria::getNumChannels(const int direction) const
 {
     return direction == SOAPY_SDR_RX ? 1 : 0;
@@ -55,11 +62,15 @@ std::vector<std::string> SoapyBirria::listGains(const int, const size_t) const
     return {"LNA", "LPF", "DIG"};
 }
 
+/* Code limits for each gain element, in steps of one. */
 SoapySDR::Range SoapyBirria::getGainRange(const int, const size_t, const std::string &name) const
 {
-    if (name == "LNA") return SoapySDR::Range(0, 3, 1);
-    if (name == "LPF") return SoapySDR::Range(0, 8, 1);
-    if (name == "DIG") return SoapySDR::Range(0, 12, 1);
+    if (name == "LNA")
+        return SoapySDR::Range(0, 3, 1);
+    if (name == "LPF")
+        return SoapySDR::Range(0, 8, 1);
+    if (name == "DIG")
+        return SoapySDR::Range(0, 12, 1);
     throw std::runtime_error("birria: unknown gain element " + name);
 }
 
@@ -71,12 +82,15 @@ bool SoapyBirria::hasGainMode(const int, const size_t) const
     return true;
 }
 
+/* Switch modes, then send the stored codes when entering manual mode. */
 void SoapyBirria::setGainMode(const int, const size_t, const bool automatic)
 {
-    if (report(birriasdr_set_tuner_gain_mode(dev_, automatic ? 0 : 1), "set_tuner_gain_mode") && !automatic)
+    if (report(birriasdr_set_tuner_gain_mode(dev_, automatic ? 0 : 1), "set_tuner_gain_mode") &&
+        !automatic)
         report(birriasdr_set_gain_codes(dev_, &gain_), "set_gain_codes");
 }
 
+/* Report automatic mode unless the library confirms manual mode. */
 bool SoapyBirria::getGainMode(const int, const size_t) const
 {
     birriasdr_gain gain;
@@ -84,42 +98,57 @@ bool SoapyBirria::getGainMode(const int, const size_t) const
     return birriasdr_get_gain_codes(dev_, &gain, &manual) != 0 || !manual;
 }
 
+/* Store the rounded, clamped code and send it only in manual mode. */
 void SoapyBirria::setGain(const int, const size_t, const std::string &name, const double value)
 {
     const auto range = getGainRange(SOAPY_SDR_RX, 0, name);
-    const uint8_t code = static_cast<uint8_t>(std::lround(std::clamp(value, range.minimum(), range.maximum())));
-    if (name == "LNA") gain_.lna = code;
-    else if (name == "LPF") gain_.lpf = code;
-    else gain_.digital = code;
+    const uint8_t code = static_cast<uint8_t>(
+        std::lround(std::clamp(value, range.minimum(), range.maximum())));
+    if (name == "LNA")
+        gain_.lna = code;
+    else if (name == "LPF")
+        gain_.lpf = code;
+    else
+        gain_.digital = code;
     if (!getGainMode(SOAPY_SDR_RX, 0))
         report(birriasdr_set_gain_codes(dev_, &gain_), "set_gain_codes");
 }
 
+/* Return the stored code, which the library may not have applied yet. */
 double SoapyBirria::getGain(const int, const size_t, const std::string &name) const
 {
-    if (name == "LNA") return gain_.lna;
-    if (name == "LPF") return gain_.lpf;
-    if (name == "DIG") return gain_.digital;
+    if (name == "LNA")
+        return gain_.lna;
+    if (name == "LPF")
+        return gain_.lpf;
+    if (name == "DIG")
+        return gain_.digital;
     throw std::runtime_error("birria: unknown gain element " + name);
 }
 
+/* Request a center in Hz. The library rejects it without retuning if invalid. */
 void SoapyBirria::setFrequency(const int, const size_t, const std::string &, const double frequency,
                                const SoapySDR::Kwargs &)
 {
-    report(birriasdr_set_center_freq(dev_, static_cast<uint64_t>(std::llround(frequency))), "set_center_freq");
+    report(birriasdr_set_center_freq(dev_, static_cast<uint64_t>(std::llround(frequency))),
+           "set_center_freq");
 }
 
+/* Return the committed center, not the frequency of samples already queued. */
 double SoapyBirria::getFrequency(const int, const size_t, const std::string &) const
 {
     return static_cast<double>(birriasdr_get_center_freq(dev_));
 }
 
+/* The only tunable element is the RF center. */
 std::vector<std::string> SoapyBirria::listFrequencies(const int, const size_t) const
 {
     return {"RF"};
 }
 
-SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t, const std::string &) const
+/* Report the library's command limits as a single range. */
+SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t,
+                                                   const std::string &) const
 {
     uint64_t minimum = 0, maximum = 0;
     const int rc = birriasdr_get_tuning_range(dev_, &minimum, &maximum);
@@ -133,6 +162,7 @@ SoapySDR::RangeList SoapyBirria::getFrequencyRange(const int, const size_t, cons
 /* The hardware rate is fixed at 40 MSps. Lower rates are 40 MSps / N, decimated here. */
 static const unsigned kFactors[] = {1, 2, 4, 5, 8, 10, 16, 20, 40};
 
+/* Select the decimation factor for the next stream. The rate is idle-only. */
 void SoapyBirria::setSampleRate(const int, const size_t, const double rate)
 {
     if (running_) {
@@ -145,14 +175,17 @@ void SoapyBirria::setSampleRate(const int, const size_t, const double rate)
             return;
         }
     }
-    SoapySDR::log(SOAPY_SDR_ERROR, "birria: sample rate must be 40 MSps divided by 1, 2, 4, 5, 8, 10, 16, 20 or 40");
+    SoapySDR::log(SOAPY_SDR_ERROR,
+                  "birria: sample rate must be 40 MSps divided by 1, 2, 4, 5, 8, 10, 16, 20 or 40");
 }
 
+/* Return the output rate after decimation. */
 double SoapyBirria::getSampleRate(const int, const size_t) const
 {
     return kBaseRate / decim_;
 }
 
+/* List the output rates from lowest to highest. */
 std::vector<double> SoapyBirria::listSampleRates(const int, const size_t) const
 {
     std::vector<double> rates;
@@ -161,11 +194,13 @@ std::vector<double> SoapyBirria::listSampleRates(const int, const size_t) const
     return rates;
 }
 
+/* Both formats come from the same decimated stream. */
 std::vector<std::string> SoapyBirria::getStreamFormats(const int, const size_t) const
 {
     return {SOAPY_SDR_CF32, SOAPY_SDR_CS16};
 }
 
+/* Report the native format and its full-scale value. */
 std::string SoapyBirria::getNativeStreamFormat(const int, const size_t, double &fullScale) const
 {
     fullScale = 8192.0; /* signed 14-bit samples carried in int16 */
@@ -185,7 +220,8 @@ void SoapyBirria::buildFilter()
     for (size_t k = 0; k < n; ++k) {
         const double x = k - mid;
         const double s = x == 0 ? 2 * fc : std::sin(2 * M_PI * fc * x) / (M_PI * x);
-        const double w = 0.42 - 0.5 * std::cos(2 * M_PI * k / (n - 1)) + 0.08 * std::cos(4 * M_PI * k / (n - 1));
+        const double w = 0.42 - 0.5 * std::cos(2 * M_PI * k / (n - 1)) +
+                         0.08 * std::cos(4 * M_PI * k / (n - 1));
         taps_.push_back(static_cast<float>(s * w));
         sum += s * w;
     }
@@ -193,6 +229,7 @@ void SoapyBirria::buildFilter()
         t = static_cast<float>(t / sum);
 }
 
+/* Accept one RX stream in CS16 or CF32. The device is the stream handle. */
 SoapySDR::Stream *SoapyBirria::setupStream(const int direction, const std::string &format,
                                            const std::vector<size_t> &, const SoapySDR::Kwargs &)
 {
@@ -203,18 +240,20 @@ SoapySDR::Stream *SoapyBirria::setupStream(const int direction, const std::strin
     return reinterpret_cast<SoapySDR::Stream *>(this);
 }
 
+/* Stop the stream if it is running, then release it. */
 void SoapyBirria::closeStream(SoapySDR::Stream *)
 {
     deactivateStream(nullptr);
     streamOpen_ = false;
 }
 
+/* Forward the library callback to the device instance. */
 void SoapyBirria::asyncCallback(const int16_t *iq, uint32_t count, uint64_t, void *ctx)
 {
     static_cast<SoapyBirria *>(ctx)->onSamples(iq, count);
 }
 
-/* Runs on the USB thread: copy and return. Never block here or the device SRAM overruns. */
+/* Runs on the read thread: copy and return. Never block here or the device SRAM overruns. */
 void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -227,6 +266,7 @@ void SoapyBirria::onSamples(const int16_t *iq, uint32_t count)
     cond_.notify_one();
 }
 
+/* Reset the filter and queue, then run the blocking library read on a worker. */
 int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, const size_t)
 {
     if (running_)
@@ -250,6 +290,7 @@ int SoapyBirria::activateStream(SoapySDR::Stream *, const int, const long long, 
     return 0;
 }
 
+/* Cancel the library read and join its worker. */
 int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int, const long long)
 {
     if (worker_.joinable()) {
@@ -260,14 +301,18 @@ int SoapyBirria::deactivateStream(SoapySDR::Stream *, const int, const long long
     return 0;
 }
 
-int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t numElems, int &flags,
-                            long long &timeNs, const long timeoutUs)
+/* Wait for enough input to fill the request, then filter and decimate it.
+ * Overflow clears the queue and restarts the filter history.
+ */
+int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t numElems,
+                            int &flags, long long &timeNs, const long timeoutUs)
 {
     flags = 0;
     timeNs = 0;
     const size_t history = taps_.empty() ? 0 : taps_.size() - 1;
     const size_t need = history + numElems * decim_; /* complex samples */
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(timeoutUs);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::microseconds(timeoutUs);
 
     while (in_.size() / 2 < need) {
         std::vector<int16_t> chunk;
@@ -276,7 +321,8 @@ int SoapyBirria::readStream(SoapySDR::Stream *, void *const *buffs, const size_t
             if (queue_.empty() && !overflow_) {
                 if (!running_)
                     return workerResult_ < 0 ? SOAPY_SDR_STREAM_ERROR : SOAPY_SDR_NOT_SUPPORTED;
-                if (!cond_.wait_until(lock, deadline, [this] { return !queue_.empty() || overflow_ || !running_; }))
+                if (!cond_.wait_until(lock, deadline,
+                                      [this] { return !queue_.empty() || overflow_ || !running_; }))
                     return SOAPY_SDR_TIMEOUT;
                 if (queue_.empty() && !overflow_)
                     continue;

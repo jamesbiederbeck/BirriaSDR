@@ -32,6 +32,7 @@ static SoapySDR::KwargsList findBirria(const SoapySDR::Kwargs &args)
     return results;
 }
 
+/* Open the dongle named by `index`, or the first one when it is absent. */
 static SoapySDR::Device *makeBirria(const SoapySDR::Kwargs &args)
 {
     const auto it = args.find("index");
